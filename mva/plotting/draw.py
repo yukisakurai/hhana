@@ -283,6 +283,12 @@ def draw(name,
             hist.SetLineWidth(0)
             hist.drawstyle = 'hist'
             model_stack.Add(hist)
+        if signal_odd is not None and signal_on_top:
+            for s in scaled_signal_odd:
+                print s.name
+                for hist in model:
+                    s.Add(hist)
+            objects.extend(scaled_signal_odd)
         if signal is not None and signal_on_top:
             for s in scaled_signal:
                 model_stack.Add(s)
@@ -299,15 +305,15 @@ def draw(name,
         else:
             objects.extend(scaled_signal)
 
-#     if signal_odd is not None and not signal_on_top:
-#         if stack_signal:
-#             # create the signal stack
-#             signal_odd_stack = HistStack()
-#             for hist in scaled_signal_odd:
-#                 signal_odd_stack.Add(hist)
-# #            objects.append(signal_odd_stack)
-#         else:
-#             objects.extend(scaled_signal_odd)
+    if signal_odd is not None and not signal_on_top:
+        if stack_signal:
+            # create the signal stack
+            signal_odd_stack = HistStack()
+            for hist in scaled_signal_odd:
+                signal_odd_stack.Add(hist)
+            objects.append(signal_odd_stack)
+        else:
+            objects.extend(scaled_signal_odd)
 
     if model is not None:
         # draw uncertainty band
