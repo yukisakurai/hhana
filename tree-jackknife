@@ -1,0 +1,165 @@
+#!/usr/bin/env python
+
+# python imports
+import os
+import logging
+import numpy as np
+from numpy.lib import recfunctions
+
+# ROOT/rootpy/root_numpy imports
+from rootpy.io import root_open
+from rootpy.tree import Cut
+from rootpy.plotting import Hist
+from root_numpy import fill_hist, array2tree, stack
+
+log = logging.getLogger(os.path.basename(__file__))
+
+fields = ['EventNumber', 'RunNumber', 'mmc1_mass', 'dEta_tau1_tau2']
+fields_names = ['EvtNum', 'RunNum', 'MMC_raw', 'deta_raw']
+
+
+def binned_rec(rec, hist):
+    """
+    Transform a 1D array of values into
+    a 1D array of histogram bins centers
+    """
+    if len(rec) == 0:
+        return rec
+    indices = fill_hist(hist, rec, return_indices=True)
+    uni_hist = hist.uniform_binned()
+    return np.take(list(uni_hist.x(overflow=True)), indices)
+
+
+def get_records(analysis, category,
+                binned_field, binned_field_name, hist,
+                category_type, clf=None):
+    # get the record array
+    rec = analysis.data.merged_records(
+        category, analysis.target_region, fields=fields,
+        include_weight=False, clf=clf, clf_name='BDT_raw')
+    # rename fields
+    if clf is not None:
+        rec.dtype.names = fields_names + ['BDT_raw']
+    else:
+        rec.dtype.names = fields_names
+    # rebin field of interest
+    binned_array = binned_rec(rec[binned_field], hist)
+    # category index
+    index_array = np.empty(len(rec), dtype=int)
+    index_array.fill(category.jk_number)
+    # category type
+    type_array = np.ones(len(rec), dtype=int)
+    # merge fields
+    rec = recfunctions.rec_append_fields(
+        rec, data=[binned_array, index_array, type_array],
+        names=[binned_field_name, 
+               'cat{0}'.format(category_type),
+               'Is{0}'.format(category_type)],
+        dtypes=['f4', 'i4', 'i4'])
+    return rec
+
+
+if __name__ == '__main__':
+    # rootpy imports
+    from rootpy.extern.argparse import ArgumentParser
+    parser = ArgumentParser()
+    parser.add_argument('--clf-bins', default='optimal')
+    args = parser.parse_args()
+    # local imports
+    from mva.analysis import Analysis
+    from mva.categories import CATEGORIES, Category_Preselection
+
+    analysis = Analysis(2012)
+    analysis.normalize(Category_Preselection)
+    
+    log.info('iterate over MVA categories')
+    mva_cr_recs = []
+    for category in CATEGORIES['mva_workspace_controls']:
+        hist = Hist(5, 0, 1.5)
+        rec = get_records(analysis, category,
+                          'deta_raw', 'deta',
+                          hist, 'MVA')
+        mva_cr_recs.append(rec)
+
+    mva_recs = []
+    for category in CATEGORIES['mva']:
+        clf = analysis.get_clf(
+            category, load=True,
+            mass=125, transform=True)
+
+        if isinstance(args.clf_bins, basestring):
+            if args.clf_bins == 'optimal':
+                bdt_bins = clf.binning(analysis.year, overflow=1E5) 
+                hist = Hist(bdt_bins)
+            else:
+                scores = analysis.get_scores(clf,
+                                             category,
+                                             analysis.target_region,
+                                             masses=[125],
+                                             systematics=analysis.systematics,
+                                             unblind=True)
+                bdt_binning = int(args.clf_bins), scores.min_score, scores.max_score
+                hist = Hist(int(args.clf_bins), scores.min_score, scores.max_score)
+                log.info('Binning: {0}'.format(bdt_binning))
+        else:
+            bdt_bins = args.clf_bins
+            hist = Hist(bdt_bins)
+        rec = get_records(analysis, category,
+                          'BDT_raw', 'BDT',
+                          hist, 'MVA', clf)
+        mva_recs.append(rec)
+    
+    log.info('iterate over CBA categories')
+    cba_recs = []
+    for category in CATEGORIES['cuts']:
+        if isinstance(category.limitbins, dict):
+            mmc_bins = category.limitbins[analysis.year]
+        else:
+            mmc_bins = category.limitbins
+        hist = Hist(mmc_bins)
+        rec = get_records(analysis, category, 'MMC_raw', 'MMC', hist, 'CBA')
+        cba_recs.append(rec)
+
+    # get full array of unique run/event numbers and common fields
+    combined_rec = stack(mva_cr_recs + mva_recs + cba_recs,
+                         fields=fields_names) 
+    combined_rec = np.unique(combined_rec)
+    
+    defaults = {
+        'MMC': -1.,
+        'BDT': -999.,
+        'BDT_raw': -999.,
+        'deta': -1.,
+        'catMVA': -1,
+        'catCBA': -1,
+        'IsMVA': 0,
+        'IsCBA': 0}
+    
+    # join the records by key=[RunNumber, EventNumber]
+    combined_rec = recfunctions.join_by(
+        ['EvtNum', 'RunNum'],
+        combined_rec, stack(mva_cr_recs, fields=['EvtNum', 'RunNum', 'deta']),
+        jointype='leftouter', usemask=False,
+        defaults=defaults)
+    
+    combined_rec = recfunctions.join_by(
+        ['EvtNum', 'RunNum'],
+        combined_rec, stack(mva_cr_recs + mva_recs, fields=['EvtNum', 'RunNum', 'IsMVA', 'catMVA']),
+        jointype='leftouter', usemask=False,
+        defaults=defaults)
+    
+    combined_rec = recfunctions.join_by(
+        ['EvtNum', 'RunNum'],
+        combined_rec, stack(mva_recs, fields=['EvtNum', 'RunNum', 'BDT', 'BDT_raw']),
+        jointype='leftouter', usemask=False,
+        defaults=defaults)
+    
+    combined_rec = recfunctions.join_by(
+        ['EvtNum', 'RunNum'],
+        combined_rec, stack(cba_recs, fields=['EvtNum', 'RunNum', 'IsCBA', 'catCBA', 'MMC']),
+        jointype='leftouter', usemask=False,
+        defaults=defaults)
+
+    with root_open('hh_jackknife_binning_{0}.root'.format(args.clf_bins), 'recreate') as out:
+        outtree = array2tree(combined_rec, name='datatree') 
+        outtree.Write()

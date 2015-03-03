@@ -1,0 +1,68 @@
+#!/usr/bin/env python
+
+from mva.cmd import get_parser
+
+args = get_parser(actions=False).parse_args()
+
+
+from mva.analysis import get_analysis
+
+analysis = get_analysis(args)
+
+from rootpy.plotting import Hist
+from rootpy.stats import histfactory
+from mva.plotting import draw_channel
+from mva.categories import NORM_CATEGORIES
+from mva import norm_cache as cache
+from mva.variables import VARIABLES
+from mva import CONST_PARAMS
+
+# reference category for initial normalization
+category = NORM_CATEGORIES[args.norm_category]
+
+# distribution to fit
+field = 'dEta_tau1_tau2'
+if args.year == 2011:
+    template = Hist(4, 0, 2)
+else:
+    template = Hist(5, 0, 2)
+
+qcd_scale, qcd_scale_error, \
+ztt_scale, ztt_scale_error = analysis.fit_norms(
+    field, template, category, args.target_region)
+
+# update the cache
+cache.set_scales(
+    args.year,
+    category.name,
+    args.embedding,
+    field,
+    args.fakes_region,
+    args.target_region,
+    qcd_scale=qcd_scale,
+    qcd_scale_error=qcd_scale_error,
+    qcd_data_scale=1.,
+    qcd_z_scale=1.,
+    qcd_others_scale=1.,
+    z_scale=ztt_scale,
+    z_scale_error=ztt_scale_error)
+
+# draw post-fit plots
+analysis.normalize(category)
+
+channels = analysis.make_var_channels(
+    template, field, [category],
+    args.target_region,
+    include_signal=False)
+
+draw_channel(
+    channels[0],
+    name=VARIABLES[field]['root'],
+    category=category,
+    output_name='{0}_postfit{1}'.format(field, analysis.get_suffix()),
+    output_dir='plots/normalization',
+    show_pvalue=True,
+    #top_label="Fakes Model: {0}".format(analysis.fakes_region),
+    plot_label='After {0} fit'.format(VARIABLES[field]['root']),
+    data_info=analysis.data.info,
+    output_formats=('eps', 'png'))

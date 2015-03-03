@@ -1,0 +1,61 @@
+#!/usr/bin/env python
+from mva.cmd import get_parser
+
+args = get_parser(actions=False).parse_args()
+
+from mva.categories import (
+    Category_Preselection,
+    Category_VBF,
+    Category_Boosted)
+from mva.analysis import get_analysis
+from mva.plotting import draw_channel_array
+from mva.variables import VARIABLES
+from rootpy.tree import Cut
+from rootpy.plotting import Hist
+from math import pi
+
+# +------+------------------+------------+
+# | Rank |     Variable     | Importance |
+# +------+------------------+------------+
+# |  1   |    mmc1_mass     |   0.360    |
+# +------+------------------+------------+
+# |  2   |   dR_tau1_tau2   |   0.127    |
+# +------+------------------+------------+
+# |  3   |  vector_sum_pt   |   0.122    |
+# +------+------------------+------------+
+# |  4   | tau2_centrality  |   0.095    |
+# +------+------------------+------------+
+# |  5   |  MET_centrality  |   0.088    |
+# +------+------------------+------------+
+# |  6   |    dEta_jets     |   0.065    |
+# +------+------------------+------------+
+# |  7   | eta_product_jets |   0.061    |
+# +------+------------------+------------+
+# |  8   |  mass_jet1_jet2  |   0.045    |
+# +------+------------------+------------+
+# |  9   | tau1_centrality  |   0.036    |
+# +------+------------------+------------+
+
+analysis = get_analysis(
+    args, year=2012,
+    systematics=False)
+
+# fakes_region='nOS_ISOL' for met centrality cut
+analysis.normalize(Category_Preselection)
+
+for var in ( 'mmc1_mass' , 'dR_tau1_tau2', 'vector_sum_pt', 'tau2_centrality', 'MET_centrality', 'dEta_jets', 'eta_product_jets', 'mass_jet1_jet2', 'tau1_centrality'):
+
+    draw_channel_array(
+        analysis, {var: VARIABLES[var]},
+        mass=125, mode=['gg', 'VBF'], signal_scale=100,
+        stack_signal=False,
+        signal_colors=['blue', 'red'],
+        signal_linestyles=['dashed', 'solid'],
+        category=Category_VBF,
+        region=analysis.target_region,
+        show_ratio=True,
+        output_dir='plots/categories',
+        output_suffix='_2012',
+        output_formats=['png', 'eps'],
+        unblind=True,
+        arrow_values=[2.])

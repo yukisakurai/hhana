@@ -1,0 +1,334 @@
+#!/usr/bin/env python
+"""
+This is the main driver script for the analysis
+"""
+from mva.cmd import get_parser
+
+args = get_parser().parse_args()
+year = args.year
+
+# stdlib imports
+import os, sys
+import shutil
+import math
+import pickle
+
+# rootpy imports
+from rootpy.tree import Cut
+from rootpy.io import root_open
+from rootpy.plotting import Hist2D, Hist
+from rootpy.utils.silence import silence_sout_serr
+from rootpy.plotting.contrib import plot_contour_matrix
+from rootpy.plotting import root2matplotlib as rplt
+
+# root imports
+import ROOT
+
+# numpy imports
+import numpy as np
+
+# matplotlib imports
+from matplotlib import cm
+from matplotlib import pyplot as plt
+
+# local imports
+from mva import log, variables, samples, MMC_MASS, plot_dir
+from mva.plotting import draw_channel_array
+# from mva.plotting import ( draw_scatter, draw_samples_array, draw_2d_hist,
+#                            draw_channel_array, draw_channel,
+#                            correlations, hist_scores )
+from mva.samples import Higgs, Data
+from mva.utils import make_multipage_pdf, braindump
+from mva.systematics import ( get_systematics, iter_systematics,
+                              parse_systematics, systematic_name )
+from mva.categories import CATEGORIES
+from mva.massregions import MassRegions
+from mva.variables import VARIABLES, WEIGHTS, YEAR_VARIABLES
+from mva.analysis import get_analysis, Analysis
+
+
+SYSTEMATICS = get_systematics(year)
+args.systematics_components = parse_systematics(args.systematics_components)
+
+mass_regions = MassRegions(
+    low=args.low_mass_cut,
+    high=args.high_mass_cut,
+    high_sideband_in_control=args.high_sideband_in_control,
+    mass_window_signal_region=False, #args.no_mmc,
+    # not enough events to only train in signal region
+    train_signal_region=False)
+
+control_region = mass_regions.control_region
+signal_region = mass_regions.signal_region
+#signal_region = control_region # for creating control workspaces
+train_region = mass_regions.train_region
+
+categories = CATEGORIES[args.categories]
+category_names = args.category_names
+target_region = args.target_region
+
+analysis = get_analysis(args)
+
+output_suffix = analysis.get_suffix()
+
+cat_defs = [args.categories]
+if args.categories != 'presel':
+    cat_defs.append(args.controls)
+
+for category in analysis.iter_categories(*cat_defs, names=args.category_names):
+
+    is_control = category.analysis_control
+
+    if 'plotevolving' in args.actions:
+        from copy import deepcopy    
+
+        clf = analysis.get_clf(category, load=True)
+        score_cuts = [-1.0, 0.0, 0.5, 0.9, 0.95, 0.987]
+
+        override_vars = [
+            'averageIntPerXing',
+            'mmc1_mass',
+            'dEta_jets',
+            'dR_tau1_tau2',
+            'jet1_pt',
+            'jet1_eta',
+            #'jet1_phi',
+            'jet2_pt',
+            'jet2_eta',
+            #'jet2_phi',
+            'tau1_pt',
+            'tau1_eta',
+            #'tau1_phi',
+            'tau2_pt',
+            'tau2_eta',
+            #'tau2_phi',
+        ]
+
+        if args.plot_expr is not None:
+            VARS_ORIGINAL = {tuple(args.plot_expr.split(',')):
+                    {'title': args.plot_name,
+                     'range': (args.plot_min, args.plot_max),
+                     'bins': args.plot_bins,
+                     'filename': 'expr_' + args.plot_name.replace(' ', '_')}}
+        elif override_vars is not None:
+            VARS_ORIGINAL = {}
+            for v in override_vars:
+                VARS_ORIGINAL[v] = VARIABLES[v]
+        else:
+            VARS_ORIGINAL = VARIABLES
+
+        for sc in score_cuts:
+            cuts = Cut(args.plot_cut)
+            VARS = deepcopy(VARS_ORIGINAL)
+            for v in VARS:
+                VARS[v]['filename'] += '_minscore_' + str(sc)
+
+            figs = draw_channel_array(
+                analysis,
+                vars=VARS,
+                mass=125,
+                mode='combined',
+                signal_scale=1,
+                category=category,
+                region=target_region,
+                show_qq=False,
+                plot_signal_significance=False,
+                systematics=SYSTEMATICS if args.systematics else None,
+                systematics_components=args.systematics_components,
+                output_formats=args.output_formats,
+                weighted=not args.no_weight,
+                plots=args.plots,
+                output_suffix=output_suffix,
+                unblind=args.unblind or is_control,
+                cuts=cuts,
+                clf=clf,
+                min_score = sc,
+                signal_on_top=True,
+            )
+
+    if 'massplot' in args.actions:
+        cuts = Cut(args.plot_cut)
+        draw_channel_array(
+            analysis,
+            vars={MMC_MASS: VARIABLES[MMC_MASS]},
+            mass=Higgs.MASSES[::2],
+            mode='combined',
+            signal_scale=50,
+            stacked_signal=False,
+            signal_colour_map=cm.jet,
+            category=category,
+            region=target_region,
+            show_qq=False,
+            plot_signal_significance=False,
+            systematics=SYSTEMATICS if args.systematics else None,
+            systematics_components=args.systematics_components,
+            output_formats=args.output_formats,
+            weighted=not args.no_weight,
+            plots=args.plots,
+            output_suffix=output_suffix,
+            unblind=args.unblind or is_control,
+            cuts=cuts)
+    
+    if 'weights' in args.actions:
+        cuts = Cut(args.plot_cut)
+        draw_samples_array(
+            WEIGHTS,
+            data=analysis.data,
+            model=analysis.backgrounds,
+            signal=[analysis.higgs_125],
+            signal_scale=50,
+            category=category,
+            region=target_region,
+            show_ratio=args.show_ratio,
+            show_qq=False,
+            plot_signal_significance=False,
+            systematics=None,
+            output_formats=args.output_formats,
+            output_suffix=output_suffix,
+            weighted=False,
+            stacked_model=False,
+            cuts=cuts)
+    
+    if 'money' in args.actions and not is_control:
+
+        scores = analysis.get_scores(clf, category, target_region,
+                mode='combined', masses=[125],
+                systematics=args.systematics,
+                unblind=True)
+
+        from rootpy.plotting import Hist, Canvas, HistStack
+        from mva.classify import histogram_scores
+        from mva.stats.utils import significance
+        from itertools import izip
+
+        b = Hist(1000, scores.min_score, scores.max_score)
+        s = b.Clone()
+        data = b.Clone()
+        for sample, bkg_scores in scores.bkg_scores:
+            histogram_scores(b, bkg_scores, inplace=True)
+        for sample, sig_scores in scores.all_sig_scores[125]:
+            histogram_scores(s, sig_scores, inplace=True)
+        histogram_scores(data, scores.data_scores, inplace=True)
+
+        # get min and max significance
+        sig, _, _ = significance(s, b)
+        min_sig, max_sig = sig.min(), sig.max()
+        log.warning("{0} {1}".format(min_sig, max_sig))
+        sig_money = Hist(10, min_sig, max_sig + 1E-5,
+            drawstyle='hist',
+            fillstyle='solid')
+        bkg_money = sig_money.Clone()
+        data_money = sig_money.Clone()
+
+        for bin, _s in izip(s.bins(), sig):
+            sig_money.Fill(_s, bin.value)
+        for bin, _b in izip(b.bins(), sig):
+            bkg_money.Fill(_b, bin.value)
+        for bin, _d in izip(data.bins(), sig):
+            data_money.Fill(_d, bin.value)
+
+        bkg_money.color = 'blue'
+        sig_money.color = 'red'
+
+        c = Canvas()
+        c.SetLogy()
+        stack = HistStack()
+        stack.Add(bkg_money)
+        stack.Add(sig_money)
+        stack.Draw()
+        stack.xaxis.title = 'S / #sqrt{S + B}'
+        stack.yaxis.title = 'Events'
+        stack.SetMinimum(15)
+        stack.SetMaximum(700)
+        stack.Draw()
+        stack.yaxis.SetRangeUser(15, 700)
+        stack.yaxis.SetLimits(15, 700)
+        data_money.Draw('same E0')
+        c.SaveAs('money_{0}.png'.format(category.name))
+
+
+    if '2d' in args.actions and not is_control:
+        log.info("plotting 2d mass vs classifier output")
+        clf = analysis.get_clf(category, load=True)
+        draw_2d_hist(
+            clf,
+            category,
+            target_region,
+            analysis.backgrounds,
+            signals=analysis.signals,
+            data=analysis.data,
+            cuts=signal_region,
+            y='mass_mmc_tau1_tau2',
+            output_suffix=output_suffix)
+
+    if 'correlate' in args.actions and not is_control:
+        log.info("drawing correlation matrices")
+        # TODO
+        # create correlation matrices for signal, background
+        # and background and data in a control region
+        clf = analysis.get_clf(category, load=True)
+        fields = clf.all_fields[:]
+        fields.remove(MMC_MASS)
+        fields.append(MMC_MASS)
+        bkg_arrs, sig_arrs = analysis.arrays(category, target_region,
+            fields=fields,
+            clf=clf, clf_name='BDT')
+        # get combined background and signal arrays
+        background = np.vstack([bkg_arrs[b] for b in bkg_arrs.keys()])
+        signal = np.vstack([sig_arrs[b] for b in sig_arrs.keys()])
+        fields += ['weight', 'BDT']
+        for i, field in enumerate(fields):
+            if field in VARIABLES:
+                scale = VARIABLES[field].get('scale', None)
+                if scale is not None:
+                    background[:,i] *= scale
+                    signal[:,i] *= scale
+
+        correlations(
+            signal, signal[:,-2],
+            background, background[:,-2],
+            fields=fields,
+            category=category,
+            output_suffix=output_suffix)
+
+        # plot 2D contour of mass vs BDT
+        fig = plt.figure()
+        bkg_hist = Hist2D(20, 50, 200, 20, -1, 1)
+        sig_hist = bkg_hist.Clone()
+        bkg_hist.fill_array(background[:,[-3, -1]], background[:,-2])
+        bkg_hist /= bkg_hist.GetMaximum()
+        sig_hist.fill_array(signal[:,[-3, -1]], signal[:,-2])
+        sig_hist /= sig_hist.GetMaximum()
+        rplt.contour(bkg_hist, zoom=2, levels=[0.05, 0.2, 0.4, 0.6, 0.8],
+            cmap=cm.get_cmap('Blues'))
+        rplt.contour(sig_hist, zoom=2, levels=[0.05, 0.2, 0.4, 0.6, 0.8],
+            cmap=cm.get_cmap('Reds'))
+        plt.ylabel('BDT')
+        plt.xlabel(VARIABLES[MMC_MASS]['title'])
+        fig.savefig('mass_vs_bdt_%s%s.png' % (category.name, output_suffix),
+            bbox_inches='tight')
+
+        # plot full contour matrix
+        plot_contour_matrix([background, signal],
+            fields=[
+                VARIABLES[field]['title'] if field in VARIABLES else field
+                    for field in fields],
+            filename='contours_%s%s.png' % (category.name, output_suffix),
+            weights=[background[:,-2], signal[:,-2]],
+            sample_names=['Background', 'Signal'])
+
+    if 'scatter' in args.actions and not is_control:
+        # show 2D plots of all input variables and with BDT output
+        log.info("drawing scatter plots of input variables")
+        clf = analysis.get_clf(category, load=True)
+        draw_scatter(
+            clf.all_fields,
+            category,
+            target_region,
+            output_suffix,
+            analysis.backgrounds,
+            data=analysis.data,
+            signals=analysis.signals,
+            signal_scale=300.,
+            classifier=clf if 'train' in args.actions else None,
+            unblind=args.unblind)

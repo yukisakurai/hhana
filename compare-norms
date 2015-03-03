@@ -1,0 +1,125 @@
+#!/usr/bin/env python
+
+from math import sqrt
+import matplotlib.pyplot as plt
+from rootpy.plotting import Hist
+from mva.analysis import Analysis
+from mva.variables import get_label
+from mva.categories import (
+    Category_Preselection, Category_Rest,
+    Category_Boosted, Category_VBF)
+
+categories = [
+    Category_Preselection, Category_Rest,
+    Category_Boosted, Category_VBF]
+category_names = ['Presel.', 'Rest', 'Boosted', 'VBF']
+
+analysis = Analysis(2012)
+
+# compare dEta fit at preselection with each category
+field = 'dEta_tau1_tau2'
+template = Hist(5, 0, 1.5)
+
+qcds = []
+qcd_es = []
+ztts = []
+ztt_es = []
+for category in categories:
+    analysis.qcd.scale = 1.
+    analysis.ztautau.scale = 1.
+    qcd, qcd_e, ztt, ztt_e = analysis.fit_norms(field, template, category, thresh=1e-5)
+    qcds.append(qcd)
+    qcd_es.append(qcd_e)
+    ztts.append(ztt)
+    ztt_es.append(ztt_e)
+
+# normalize wrt to preselection as reference
+ref_qcd = qcds[0]
+ref_ztt = ztts[0]
+ref_qcd_e = qcd_es[0]
+ref_ztt_e = ztt_es[0]
+qcds = [q / ref_qcd for q in qcds]
+qcd_es = [q / ref_qcd for q in qcd_es]
+ztts = [q / ref_ztt for q in ztts]
+ztt_es = [q / ref_ztt for q in ztt_es]
+
+# plot
+f, axarr = plt.subplots(2, sharex=True, figsize=(10, 7), dpi=100)
+# Fine-tune figure; make subplots close to each other and hide x ticks for
+# all but bottom plot.
+plt.setp([a.get_xticklabels() for a in f.axes[:-1]], visible=False)
+for i, (name, vals, errs) in enumerate([['Fakes', qcds, qcd_es], [r'$Z\rightarrow\tau\tau$', ztts, ztt_es]]):
+    axarr[i].set_ylabel(name)
+    axarr[i].errorbar(range(len(vals)), vals, yerr=errs, fmt='o')
+    up = max([v + e for v, e in zip(vals, errs)])
+    dn = min([v - e for v, e in zip(vals, errs)])
+    width = up - dn
+    axarr[i].set_ylim(dn - width / 4, up + width / 4)
+    yloc = plt.MaxNLocator(4, prune='both')
+    axarr[i].yaxis.set_major_locator(yloc)
+    # draw average line
+    avg = sum([x / s**2 for x, s in zip(vals, errs)]) / sum([1 / s**2 for s in errs])
+    axarr[i].plot([-0.5, len(vals) - 0.5], [avg, avg], 'r--')
+axarr[-1].set_xticks(range(len(categories)))
+axarr[-1].set_xticklabels(category_names, rotation=45)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+for fmt in ('eps', 'png'):
+    plt.savefig('compare_norms_categories.{0}'.format(fmt))
+
+# compare dEta fit with fit of other fields
+fields = {
+    #'dR_tau1_tau2': Hist(5, 0.8, 2.4),
+    'MET_centrality': Hist(5, -0.5, sqrt(2)),
+    'MET_bisecting': Hist(2, -0.5, 1.5),
+    'mass_vis_tau1_tau2': Hist(5, 30000, 130000),
+    'mmc1_mass': Hist(5, 30, 130),
+    #'vector_sum_pt': Hist(8, 0, 80000),
+    #'numJets': Hist(7, -.5, 6.5),
+    }
+qcds = [ref_qcd]
+qcd_es = [ref_qcd_e]
+ztts = [ref_ztt]
+ztt_es = [ref_ztt_e]
+field_names = [get_label(field, units=False, latex=True)]
+for field, template in fields.items():
+    analysis.qcd.scale = 1.
+    analysis.ztautau.scale = 1.
+    qcd, qcd_e, ztt, ztt_e = analysis.fit_norms(field, template, Category_Preselection, thresh=1e-5)
+    qcds.append(qcd)
+    qcd_es.append(qcd_e)
+    ztts.append(ztt)
+    ztt_es.append(ztt_e)
+    field_names.append(get_label(field, units=False, latex=True))
+
+# normalize wrt dEta fit as reference
+ref_qcd = qcds[0]
+ref_ztt = ztts[0]
+qcds = [q / ref_qcd for q in qcds]
+qcd_es = [q / ref_qcd for q in qcd_es]
+ztts = [q / ref_ztt for q in ztts]
+ztt_es = [q / ref_ztt for q in ztt_es]
+
+# plot
+f, axarr = plt.subplots(2, sharex=True, figsize=(10, 7), dpi=100)
+# Fine-tune figure; make subplots close to each other and hide x ticks for
+# all but bottom plot.
+plt.setp([a.get_xticklabels() for a in f.axes[:-1]], visible=False)
+for i, (name, vals, errs) in enumerate([['Fakes', qcds, qcd_es], [r'$Z\rightarrow\tau\tau$', ztts, ztt_es]]):
+    axarr[i].set_ylabel(name)
+    axarr[i].errorbar(range(len(vals)), vals, yerr=errs, fmt='o')
+    up = max([v + e for v, e in zip(vals, errs)])
+    dn = min([v - e for v, e in zip(vals, errs)])
+    width = up - dn
+    axarr[i].set_ylim(dn - width / 4, up + width / 4)
+    yloc = plt.MaxNLocator(4, prune='both')
+    axarr[i].yaxis.set_major_locator(yloc)
+    # draw average line
+    avg = sum([x / s**2 for x, s in zip(vals, errs)]) / sum([1 / s**2 for s in errs])
+    axarr[i].plot([-0.5, len(vals) - 0.5], [avg, avg], 'r--')
+axarr[-1].set_xticks(range(len(field_names)))
+axarr[-1].set_xticklabels(field_names, rotation=45)
+plt.tight_layout()
+plt.subplots_adjust(hspace=0.1)
+for fmt in ('eps', 'png'):
+    plt.savefig('compare_norms_other_fields.{0}'.format(fmt))

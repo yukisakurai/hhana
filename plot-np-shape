@@ -1,0 +1,237 @@
+#!/usr/bin/env python
+
+# python imports
+import os
+import logging
+
+# ROOT/rootpy imports
+from rootpy import ROOT
+from rootpy.extern.argparse import ArgumentParser
+from rootpy.stats.histfactory import measurements_from_xml, HistoSys, OverallSys, Sample
+from rootpy.plotting import Hist, Legend, Graph, Canvas
+from rootpy.plotting.utils import get_band
+from rootpy.utils.path import mkdir_p
+
+# local imports
+from statstools.fixups import find_measurements
+from statstools import log; log = log['plot-np-shape']
+from mva.plotting.templates import RatioPlot
+from mva import save_canvas
+
+log = logging.getLogger(os.path.basename(__file__))
+
+parser = ArgumentParser()
+parser.add_argument('--logy', action='store_true', default=False)
+parser.add_argument('paths', nargs='+')
+args = parser.parse_args()
+
+
+class MultipleCanvas(Canvas):
+    def __init__(self, canvas_list):
+        if not isinstance(canvas_list, (tuple, list)):
+            raise RuntimeError('Wrong argument')
+        self.Divide(len(canvas_list))            
+        for ic, canv in enumerate(canvas_list):
+            self.cd(ic+1)
+            canv.Draw()
+
+
+def draw_ratio(nom, sys_var,
+               textsize=18,
+               ratio_range=(-4, 4),
+               ratio_line_values=[-2, 0, 2],
+               sys_name='syst',
+               sample_name=None,
+               category_name=None,
+               optional_label_text=None,
+               logy=False):
+    """
+    Draw a canvas with an Hists and its up/down systematic variations 
+    and a ratio plot between the variations and the nominal
+
+    Parameters
+    ----------
+    nom: Nominal Hist -- denominator in the ratio
+    sys_var: Shifted Hists (up/down) -- numerator in the ratio
+    """
+    up = sys_var[0]
+    do = sys_var[1]
+    nom.title = 'Nominal'
+    up.title = '+1 #sigma'
+    do.title = '-1 #sigma'
+    nom.color = 'black'
+    up.color = 'red'
+    do.color = 'blue'
+    nom.legendstyle = 'L'
+    up.legendstyle = 'L'
+    do.legendstyle = 'L'
+    nom.markersize = 0
+    up.markersize = 0
+    do.markersize = 0
+    nom.linewidth = 2
+    up.linewidth = 2
+    do.linewidth = 2
+    nom.fillstyle = 'hollow'
+    up.fillstyle = 'hollow'
+    do.fillstyle = 'hollow'
+    nom.linestyle = 'solid'
+    up.linestyle = 'dashed'
+    do.linestyle = 'dashed'
+    nom.drawstyle='hist E0'
+    up.drawstyle='hist'
+    do.drawstyle='hist'
+
+    if nom.integral() != 0:
+        ratio_up = Hist.divide(up - nom, nom, fill_value=0)
+        ratio_do = Hist.divide(do - nom, nom, fill_value=0)
+    else:
+        ratio_up = nom.Clone()
+        ratio_up[:] = (0, 0)
+        ratio_do = nom.Clone()
+        ratio_do[:] = (0, 0)
+    
+    ratio_limit = max([abs(r) for r in 
+                       list(ratio_up.y())+list(ratio_do.y())])
+    # add 10% extra space for plotting
+    ratio_limit_pad = ratio_limit + 0.1 * ratio_limit 
+
+    ratio_up.drawstyle = 'hist'
+    ratio_up.color = 'red'
+    ratio_do.drawstyle = 'hist'
+    ratio_do.color = 'blue'
+    ratio_do.fillstyle = '/'
+    ratio_up.fillstyle = '\\'
+
+    # zero error on ratios
+    for bin in ratio_up.bins():
+        bin.error = 0.
+    for bin in ratio_do.bins():
+        bin.error = 0.
+    for bin in up.bins():
+        bin.error = 0.
+    for bin in do.bins():
+        bin.error = 0.
+
+    plot = RatioPlot(xtitle='Observable',
+                     ytitle='Events',
+                     logy=logy,
+                     ratio_line_values=(-ratio_limit, 0, ratio_limit),
+                     ratio_limits=(-ratio_limit_pad, ratio_limit_pad),
+                     ratio_title='Rel. Variation',
+                     prune_ratio_ticks=True, ratio_margin=22, offset=-72)
+
+    plot.draw('main', [nom, up, do], ypadding=(0.4, 0.), logy_crop_value=1e-1)
+    plot.draw('ratio', [ratio_up, ratio_do],
+              snap=False, ypadding=(0.15, 0.15), ydivisions=204)
+
+    with plot.pad('main') as pad:
+        # legend
+        leg = Legend([nom, up, do], 0, 0.19,
+                     entrysep=0.01, entryheight=0.05,
+                     margin=0.35, textsize=textsize)
+        leg.Draw()
+        # draw the category label
+        label = ROOT.TLatex(
+            pad.GetLeftMargin() + 0.04, 0.87,
+            "{0}: {1}".format(sample_name, sys_name))
+        label.SetNDC()
+        label.SetTextFont(43)
+        label.SetTextSize(textsize)
+        label.Draw()
+        # show p-value and chi^2
+        if nom.integral() != 0:
+            try:
+                chi2_up = nom.Chi2Test(up, 'WW CHI2/NDF')
+            except:
+                chi2_up = 0
+            try:
+                chi2_do = nom.Chi2Test(do, 'WW CHI2/NDF')
+            except:
+                chi2_do = 0
+        else:
+            chi2_up = 0
+            chi2_do = 0
+        chi2_up_label = ROOT.TLatex(
+            pad.GetLeftMargin() + 0.04, 0.64,
+            "+1#sigma: #chi^{{2}}/ndf={0:.2f}".format(chi2_up))
+        chi2_up_label.SetNDC(True)
+        chi2_up_label.SetTextFont(43)
+        chi2_up_label.SetTextSize(textsize)
+        chi2_up_label.Draw()
+        chi2_do_label = ROOT.TLatex(
+            pad.GetLeftMargin() + 0.04, 0.72,
+            "-1#sigma: #chi^{{2}}/ndf={0:.2f}".format(chi2_do))
+        chi2_do_label.SetNDC(True)
+        chi2_do_label.SetTextFont(43)
+        chi2_do_label.SetTextSize(textsize)
+        chi2_do_label.Draw()
+        if category_name is not None:
+            sample_cat_label = ROOT.TLatex(pad.GetLeftMargin()+0.04, 0.8,
+                                           category_name)
+            sample_cat_label.SetNDC(True)
+            sample_cat_label.SetTextFont(43)
+            sample_cat_label.SetTextSize(textsize)
+            sample_cat_label.Draw()
+        if optional_label_text is not None:
+            optional_label = ROOT.TLatex(pad.GetLeftMargin()+0.55,0.87,
+                                         optional_label_text)
+            optional_label.SetNDC(True)
+            optional_label.SetTextFont(43)
+            optional_label.SetTextSize(textsize)
+            optional_label.Draw()
+
+    with plot.pad('ratio') as pad:
+        # print the abs(max variation)
+        label = ROOT.TLatex(
+            1 - pad.GetRightMargin() + 0.01, 1,
+            # 1 + pad.GetRightMargin(), pad.GetTopMargin(),
+            '{0:.2f}'.format(ratio_limit))
+        label.SetNDC(True)
+        label.SetTextAngle(-90)
+        label.SetTextFont(43)
+        label.SetTextSize(textsize)
+        label.Draw()
+
+    return plot
+
+
+def sum_samples(sample_list):
+    return 0
+
+
+for input_path in args.paths:
+    """
+    Traverse all measurements and create the syst plots
+    """
+    if not os.path.isdir(input_path):
+        raise ValueError("{0} is not an existing directory".format(input_path))
+    input_path = os.path.normpath(input_path)
+    for dirpath, measurement_file in find_measurements(input_path):
+        path = os.path.join(dirpath, measurement_file)
+        measurements = measurements_from_xml(
+            path, cd_parent=True,
+            collect_histograms=True,
+            silence=True)
+        plots_dir = os.path.join(os.path.normpath(dirpath) + '_plots', 'np_shapes')
+        if not os.path.exists(plots_dir):
+            mkdir_p(plots_dir)
+        for meas in measurements:
+            log.info(meas.name)
+            for channel in meas.channels:
+                log.info(channel.name)
+                for sample in channel.samples:
+                    log.info(sample.name)
+                    hnom = sample.hist
+                    for name, osys, hsys in sample.iter_sys():
+                        if isinstance(osys, OverallSys):
+                            log.info('{0}: [{1}, {2}]'.format(name, osys.low, osys.high))
+                        if isinstance(hsys, HistoSys):
+                            hsys_low, hsys_high = sample.sys_hist(name)
+                            plot = draw_ratio(hnom, (hsys_high, hsys_low),
+                                              sys_name=name,
+                                              sample_name=sample.name,
+                                              category_name=channel.name,
+                                              logy=args.logy)
+                            plot.SaveAs(os.path.join(plots_dir,
+                                                     'shape_{0}_{1}_{2}.png'.format(
+                                                         channel.name, sample.name, name)))

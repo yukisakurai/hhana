@@ -1,0 +1,10 @@
+#!/usr/bin/env python
+from ROOT import TH1F , TCanvas
+from root_numpy import fill_hist
+import numpy as np
+
+c = TCanvas("c","")
+np.arr = [ 1 , 2 , 3 ]
+hist = TH1F("test","",5,0.0,5.0)
+fill_hist(hist,np.arr)
+

@@ -1,0 +1,515 @@
+#!/usr/bin/env python
+import os
+from math import log
+import pickle
+
+from rootpy.plotting import Hist, Canvas
+from rootpy.plotting import root2matplotlib as rplt
+from rootpy.stats.histfactory import (
+    Data, Sample, Channel, make_measurement, make_workspace)
+
+from root_numpy import fill_hist
+import numpy as np
+import matplotlib.pyplot as plt
+
+from mva import CONST_PARAMS, CACHE_DIR
+from mva.categories import Category_VBF, Category_Boosted
+from mva.samples import QCD, Ztautau
+from mva.analysis import Analysis
+from mva.defaults import TARGET_REGION
+
+from statstools.fixups import fix_measurement
+from statstools.significance import significance
+from statstools.parallel import map_pool, FuncWorker
+
+
+def get_workspace(scores, binning,
+                  mass=125,
+                  systematics=False):
+    hist_template = Hist(binning)
+    background = []
+    for sample, scores_dict in scores.bkg_scores:
+        background.append(sample.get_histfactory_sample(
+            hist_template, 'classifier', category, TARGET_REGION,
+            scores=scores_dict,
+            systematics=systematics))
+    signal = []
+    for sample, scores_dict in scores.all_sig_scores[mass]:
+        signal.append(sample.get_histfactory_sample(
+            hist_template, 'classifier', category, TARGET_REGION,
+            scores=scores_dict,
+            systematics=systematics))
+    # TODO: why is the clone needed?
+    data_hist = sum([b.hist.Clone(shallow=True) for b in background])
+    data_hist.name = 'Data'
+    data = Data('Data', data_hist)
+    channel = Channel(category.name, signal + background, data)
+    measurement = make_measurement(
+        'MVA', channel,
+        POI='SigXsecOverSM',
+        const_params=CONST_PARAMS)
+    fix_measurement(measurement)
+    return make_workspace(measurement, silence=True)
+
+
+def get_sig(scores, binning, edge=None, pos=1,
+            mass=125,
+            systematics=False):
+    if edge is not None:
+        binning = binning[:]
+        binning.insert(pos, edge)
+    ws = get_workspace(scores, binning,
+                       mass=mass,
+                       systematics=systematics)
+    sig, mu, mu_error = significance(ws)
+    # handle nan
+    return 0 if sig != sig else sig
+
+
+def get_valid_range(bkg_scores, sig_scores,
+                    left, right, steps,
+                    min_bkg_unweighted,
+                    min_bkg_weighted,
+                    sig_shrinkage):
+    # Only consider edges that give non-negative yields for all backgrounds
+    # (negative weights on the background events can be present) and edges that
+    # will hold at least min_bkg_unweighted events in the new bin.
+    bkg_weighted = []
+    bkg_unweighted = []
+    sep_sums_right_weighted = []
+    sep_sums_right_weighted_critical = []
+    sep_sums_left_weighted = []
+    sep_sums_left_weighted_critical = []
+
+    for bkg, scores_dict in bkg_scores:
+        weighted = Hist(steps, left, right)
+        unweighted = weighted.Clone()
+        s, w = scores_dict['NOMINAL']
+        fill_hist(weighted, s, w)
+        fill_hist(unweighted, s)
+        bkg_weighted.append(weighted)
+        bkg_unweighted.append(unweighted)
+        # reverse cumsum
+        sums_right = np.cumsum(np.array(list(weighted.y()))[::-1])[::-1]
+        # cumsum
+        sums_left = np.cumsum(np.array(list(weighted.y())))
+        sep_sums_right_weighted.append(sums_right)
+        sep_sums_left_weighted.append(sums_left)
+        if isinstance(bkg, (QCD, Ztautau)):
+            sep_sums_right_weighted_critical.append(sums_right)
+            sep_sums_left_weighted_critical.append(sums_left)
+
+    tot_unweighted = sum(bkg_unweighted)
+    # reverse cumsum
+    sum_unweighted_right = np.cumsum(np.array(list(tot_unweighted.y()))[::-1])[::-1]
+    # cumsum
+    sum_unweighted_left = np.cumsum(np.array(list(tot_unweighted.y())))
+
+    tot_weighted = sum(bkg_weighted)
+    # reverse comsum
+    sum_weighted_right = np.cumsum(np.array(list(tot_weighted.y()))[::-1])[::-1]
+    # cumsum
+    sum_weighted_left = np.cumsum(np.array(list(tot_weighted.y())))
+
+    # require all backgrounds are nonnegative
+    all_nonneg_right = np.logical_and.reduce([
+        b >= 0. for b in sep_sums_right_weighted])
+    all_nonneg_left = np.logical_and.reduce([
+        b >= 0. for b in sep_sums_left_weighted])
+
+    # require that critical backgrounds (QCD and Ztt) are positive
+    critical_positive_right = np.logical_and.reduce([
+        b > 0. for b in sep_sums_right_weighted_critical])
+    critical_positive_left = np.logical_and.reduce([
+        b > 0. for b in sep_sums_left_weighted_critical])
+
+    all_positive_right = np.logical_and(all_nonneg_right, critical_positive_right)
+    if not np.any(all_positive_right):
+        # not possible to create any new bins
+        return None, None, None
+
+    all_positive_left = np.logical_and(all_nonneg_left, critical_positive_left)
+    if not np.any(all_positive_left):
+        # not possible to create any new bins
+        return None, None, None
+
+    sum_unweighted_right_valid = sum_unweighted_right >= min_bkg_unweighted
+    if not np.any(sum_unweighted_right_valid):
+        # not possible to create any new bins
+        return None, None, None
+    
+    sum_unweighted_left_valid = sum_unweighted_left >= min_bkg_unweighted
+    if not np.any(sum_unweighted_left_valid):
+        # not possible to create any new bins
+        return None, None, None
+
+    sum_weighted_right_valid = sum_weighted_right >= min_bkg_weighted
+    if not np.any(sum_weighted_right_valid):
+        # not possible to create any new bins
+        return None, None, None
+    
+    sum_weighted_left_valid = sum_weighted_left >= min_bkg_weighted
+    if not np.any(sum_weighted_left_valid):
+        # not possible to create any new bins
+        return None, None, None
+
+    # get last bin edge that satisfies background requirements
+    last_bin_min_bkg_unweighted = np.where(sum_unweighted_right_valid)[-1][-1]
+    last_bin_min_bkg_weighted = np.where(sum_weighted_right_valid)[-1][-1]
+    last_bin_min_bkg = min(last_bin_min_bkg_unweighted,
+                           last_bin_min_bkg_weighted)
+    
+    # bump last bin edge down until background requirements are satisfied
+    last_bin_min_bkg -= all_positive_right[:last_bin_min_bkg + 1][::-1].argmax()
+    # sanity check
+    assert(last_bin_min_bkg >= 0)
+
+    # get first bin edge that satisfies background requirements
+    first_bin_min_bkg_unweighted = np.where(sum_unweighted_left_valid)[-1][0]
+    first_bin_min_bkg_weighted = np.where(sum_weighted_left_valid)[-1][0]
+    first_bin_min_bkg = max(first_bin_min_bkg_unweighted,
+                            first_bin_min_bkg_weighted)
+    
+    # bump first bin edge up until background requirements are satisfied
+    first_bin_min_bkg += all_positive_left[first_bin_min_bkg:].argmax()
+
+    # require more background on left of cut than right
+    # (avoids complex noisy binnings and promotes a "good" background shape)
+    first_bin_min_bkg = max(first_bin_min_bkg,
+        (sum_weighted_left >= np.concatenate(
+            [[sum_weighted_right[0]], sum_weighted_right])[:-1]).argmax() - 1)
+
+    # sanity check
+    assert(first_bin_min_bkg < len(bkg_weighted[0]))
+    return int(first_bin_min_bkg), int(last_bin_min_bkg), bkg_weighted[0]
+
+
+def get_best_edge(scores, edges, pos=0,
+                  steps=50,
+                  min_bkg_unweighted=10,
+                  min_bkg_weighted=0,
+                  sig_shrinkage=0.1,
+                  mass=125,
+                  systematics=False,
+                  n_jobs=-1):
+    if pos + 2 == 0:
+        left, right = edges[pos:]
+    else:
+        left, right = edges[pos:pos + 2]
+    
+    # get the valid range that respects the background requirements
+    left_idx, right_idx, template = get_valid_range(
+        scores.bkg_scores, scores.all_sig_scores[mass],
+        left, right, steps,
+        min_bkg_unweighted, min_bkg_weighted, sig_shrinkage)
+    
+    if left_idx is None or right_idx is None:
+        # not possible to add an edge 
+        return None, None, None, None, -1
+
+    if left_idx >= right_idx - 1:
+        # not possible to add an edge
+        # ignore only option if left_idx == right_idx - 1
+        return None, None, None, None, -1
+
+    probe_edges = list(template.xedges())[left_idx + 1:right_idx + 1]
+
+    # get significance for each candidate bin edge
+    sigs = map_pool(FuncWorker,
+                    [(get_sig, scores, edges, x, pos + 1) for x in probe_edges],
+                    mass=mass,
+                    systematics=systematics,
+                    n_jobs=n_jobs)
+
+    # get best significance and best edge location
+    best_sig = np.max(sigs)
+    best_edge_idx = np.argmax(sigs)
+    best_edge = probe_edges[best_edge_idx]
+
+    # get unweighted and weighted number of background events in this new bin
+    bkg_unweighted = []
+    bkg_weighted = []
+    for bkg, scores_dict in scores.bkg_scores:
+        unweighted = Hist([left, best_edge, right])
+        weighted = unweighted.Clone()
+        s, w = scores_dict['NOMINAL']
+        fill_hist(unweighted, s)
+        fill_hist(weighted, s, w)
+        bkg_unweighted.append(unweighted)
+        bkg_weighted.append(weighted)
+    tot_unweighted = sum(bkg_unweighted)
+    tot_weighted = sum(bkg_weighted)
+    bkg_unweighted_left = tot_unweighted[1].value
+    bkg_unweighted_right = tot_unweighted[2].value
+    bkg_weighted_left = tot_weighted[1].value
+    bkg_weighted_right = tot_weighted[2].value
+   
+    # Sanity check:
+    assert(bkg_unweighted_right >= min_bkg_unweighted)
+    assert(bkg_weighted_right >= min_bkg_weighted)
+    assert(bkg_unweighted_left >= min_bkg_unweighted)
+    assert(bkg_weighted_left >= min_bkg_weighted)
+
+    return probe_edges, sigs, bkg_weighted_right, best_edge, best_sig
+
+
+if __name__ == '__main__':
+ 
+    # pip install --user tabulate
+    from tabulate import tabulate
+    from rootpy.extern.argparse import ArgumentParser
+
+    parser = ArgumentParser()
+    parser.add_argument('--year', type=int, choices=[2011, 2012], default=2012)
+    parser.add_argument('--categories', nargs='*')
+    parser.add_argument('--min-bkg-unweighted', type=int, default=5)
+    parser.add_argument('--min-bkg-weighted', type=float, default=1.)
+    parser.add_argument('--sig-shrinkage', type=float, default=0.1)
+    parser.add_argument('--steps', type=int, default=100)
+    parser.add_argument('--systematics', action='store_true', default=False)
+    parser.add_argument('--mass', type=int, default=125, choices=range(100, 155, 5))
+    parser.add_argument('--procs', type=int, default=-1)
+    args = parser.parse_args()
+    year = args.year
+    mass = args.mass
+
+    analysis = Analysis(year,
+                        systematics=args.systematics,
+                        qcd_workspace_norm=False,
+                        ztt_workspace_norm=False,
+                        qcd_shape_systematic=False)
+
+    for category in (Category_Boosted, Category_VBF):
+        if args.categories and category.name not in args.categories:
+            continue
+        analysis.normalize(category)
+        clf = analysis.get_clf(category, load=True, mass=mass, transform=True)
+        scores = analysis.get_scores(
+            clf, category, TARGET_REGION, mode='workspace',
+            masses=[mass], systematics=args.systematics)
+        min_score, max_score = scores.min_score, scores.max_score
+
+        # nominal scores for convenience
+        b = np.concatenate([scores_dict['NOMINAL'][0] for _, scores_dict in scores.bkg_scores])
+        bw = np.concatenate([scores_dict['NOMINAL'][1] for _, scores_dict in scores.bkg_scores])
+        s = np.concatenate([scores_dict['NOMINAL'][0] for _, scores_dict in scores.all_sig_scores[mass]])
+        sw = np.concatenate([scores_dict['NOMINAL'][1] for _, scores_dict in scores.all_sig_scores[mass]])
+
+        min_score = min(np.min(s), np.min(b)) - 1E-8
+        max_score = max(np.max(s), np.max(b)) + 1E-8
+        s = (s, sw)
+        b = (b, bw)
+        
+        # setup the mpl figure and axes
+        fig, (ax1, ax_rebin) = plt.subplots(nrows=1, ncols=2, figsize=(15, 6))
+        ax1.set_ylabel('Significance')
+        ax1.set_xlabel('BDT Score')
+        ax2 = ax1.twiny()
+        ax2.set_xlabel('Number of Fixed-width Bins')
+        ax3 = ax1.twinx()
+        ax3.set_ylabel('Events')
+        ax3.set_yscale('log')
+        ax_rebin.set_xlabel('BDT Score')
+        # share ylabel from right of left plot
+        #ax_rebin.set_ylabel('Events')
+        ax_rebin.set_yscale('log')
+
+        # plot the distributions
+        b_hist = Hist(20, min_score, max_score, color='blue',
+                      linewidth=3, linestyle='dashed')
+        s_hist = b_hist.Clone(color='red')
+        fill_hist(b_hist, *b)
+        fill_hist(s_hist, *s)
+        rplt.hist(b_hist, axes=ax3, label='Background')
+        rplt.hist(s_hist, axes=ax3, label='Signal')
+
+        # poor man's constant width binning
+        nfixed_bins = range(1, 21)
+        fixed_sigs = map_pool(
+            FuncWorker,
+            [(get_sig, scores, np.linspace(min_score, max_score, bins + 1))
+                for bins in nfixed_bins], 
+            mass=mass,
+            systematics=args.systematics,
+            n_jobs=args.procs)
+        max_fixed_sig = np.max(fixed_sigs)
+        max_fixed_nbins = nfixed_bins[np.argmax(fixed_sigs)]
+        
+        # show significance vs number of equal width bins
+        ax2.plot(nfixed_bins, fixed_sigs, label='Fixed-width Bins', color='green', linestyle='-')
+
+        # demonstrate smart binning
+        from itertools import cycle
+        lines = ["-", "--", "-.", ":"]
+        linecycler = cycle(lines)
+        
+        # initial single bin from min to max score
+        binning = [float(min_score), float(max_score)]
+        prev_best_sig = 0
+
+        # find best initial split
+        edges, sigs, nbkg, best_edge, best_sig = get_best_edge(
+            scores, binning,
+            steps=args.steps,
+            min_bkg_unweighted=args.min_bkg_unweighted,
+            min_bkg_weighted=args.min_bkg_weighted,
+            sig_shrinkage=args.sig_shrinkage,
+            mass=mass,
+            systematics=args.systematics,
+            n_jobs=args.procs)
+
+        if best_sig <= 0:
+            raise RuntimeError("unable to make first split")
+
+        prev_best_sig = best_sig
+        # show significance vs middle bin edge location
+        ax1.plot(edges, sigs, color='black', linestyle=next(linecycler))
+        ax1.plot((best_edge, best_edge), (0, abs(best_sig)),
+                    color='black', linestyle='-', linewidth=2)
+        binning.insert(1, float(best_edge))
+        
+        # continue splitting right
+        # Sometimes there is a local maximum above the first inserted bin edge
+        # from above. Adding a bin edge here will usually improve the significance.
+        while True:
+            edges, sigs, _, best_edge, best_sig = get_best_edge(
+                scores, binning,
+                pos=-2,
+                steps=args.steps,
+                min_bkg_unweighted=args.min_bkg_unweighted,
+                min_bkg_weighted=args.min_bkg_weighted,
+                sig_shrinkage=args.sig_shrinkage,
+                mass=mass,
+                systematics=args.systematics,
+                n_jobs=args.procs)
+            if best_sig <= prev_best_sig:
+                # no improvement or impossible to add an edge
+                break
+            # show significance vs middle bin edge location
+            ax1.plot(edges, sigs, color='red', linestyle=next(linecycler))
+            ax1.plot((best_edge, best_edge), (0, abs(best_sig)),
+                     color='red', linestyle='-', linewidth=2)
+            binning.insert(-1, float(best_edge))
+            prev_best_sig = best_sig
+        
+        # continue splitting left
+        while True:
+            edges, sigs, nbkg, best_edge, best_sig = get_best_edge(
+                scores, binning,
+                steps=args.steps,
+                min_bkg_unweighted=args.min_bkg_unweighted,
+                #min_bkg_weighted=args.min_bkg_weighted,
+                min_bkg_weighted=nbkg,
+                sig_shrinkage=args.sig_shrinkage,
+                mass=mass,
+                systematics=args.systematics,
+                n_jobs=args.procs)
+            if best_sig <= 1.001 * prev_best_sig:
+                # no reasonable improvement or impossible to add an edge
+                break
+            # show significance vs middle bin edge location
+            ax1.plot(edges, sigs, color='black', linestyle=next(linecycler))
+            ax1.plot((best_edge, best_edge), (0, abs(best_sig)),
+                     color='black', linestyle='-', linewidth=2)
+            binning.insert(1, float(best_edge))
+            prev_best_sig = best_sig
+        
+        # save the binning
+        with open(os.path.join(CACHE_DIR, 'binning/binning_{0}_{1}_{2}.pickle'.format(
+                               category.name, mass, year % 1000)), 'w') as f:
+            pickle.dump(binning, f)
+
+        # draw the rebinned scores
+        b_hist = Hist(binning, color='blue',
+                      linewidth=3, linestyle='dashed')
+        s_hist = b_hist.Clone(color='red')
+        fill_hist(b_hist, *b)
+        fill_hist(s_hist, *s)
+        rplt.hist(b_hist, axes=ax_rebin, label='Background')
+        rplt.hist(s_hist, axes=ax_rebin, label='Signal')
+
+        #handles1, labels1 = ax1.get_legend_handles_labels()
+        #handles2, labels2 = ax2.get_legend_handles_labels()
+        #handles3, labels3 = ax3.get_legend_handles_labels()
+        #ax2.legend(handles1+handles2+handles3, labels1+labels2+labels3)
+        plt.tight_layout()
+        fig.savefig('plots/binning/binning_{0}_{1}_{2}.png'.format(
+                    category.name, mass, year % 1000))
+
+        print category.name
+        print
+
+        # tabulate weighted and unweighted events per sample per bin
+        table = []
+        table_latex = []
+        headers = [str(i) for i in xrange(1, len(binning) + 1)]
+        headers.insert(0, 'Bin')
+        totals = []
+        
+        sample_types = ['Total Signal', 'Total Background']
+        totals = []
+        for sample_type, samples in zip(sample_types,
+                                        (scores.all_sig_scores[mass],
+                                         scores.bkg_scores[::-1])):
+            total_weighted = Hist(binning)
+            total_unweighted = total_weighted.Clone()
+            for sample, scores_dict in samples:
+                s, w = scores_dict['NOMINAL']
+                hist_weighted = Hist(binning)
+                hist_unweighted = hist_weighted.Clone()
+                fill_hist(hist_weighted, s, w)
+                fill_hist(hist_unweighted, s)
+
+                weighted = [u'{0:.1f} +/- {1:.1f}'.format(bin.value, bin.error)
+                            for bin in hist_weighted.bins()]
+                weighted.insert(0, 'weighted')
+                unweighted = [u'{0:.1f} +/- {1:.1f}'.format(bin.value, bin.error)
+                            for bin in hist_unweighted.bins()]
+                unweighted.insert(0, 'unweighted')
+                table.extend([[sample.name] + ['',] * len(binning), weighted, unweighted])
+                
+                weighted_latex = [u'${0:.1f} \pm {1:.1f}$'.format(bin.value, bin.error)
+                                  for bin in hist_weighted.bins()]
+                weighted_latex.insert(0, 'weighted')
+                unweighted_latex = [u'${0:.1f} \pm {1:.1f}$'.format(bin.value, bin.error)
+                                    for bin in hist_unweighted.bins()]
+                unweighted_latex.insert(0, 'unweighted')
+                table_latex.extend([[sample.name.replace('_', ' ')] +
+                                    ['',] * len(binning), weighted_latex, unweighted_latex])
+
+                total_weighted += hist_weighted
+                total_unweighted += hist_unweighted
+            
+            weighted = [u'{0:.1f} +/- {1:.1f}'.format(bin.value, bin.error)
+                        for bin in total_weighted.bins()]
+            weighted.insert(0, 'weighted')
+            unweighted = [u'{0:.1f} +/- {1:.1f}'.format(bin.value, bin.error)
+                          for bin in total_unweighted.bins()]
+            unweighted.insert(0, 'unweighted')
+            table.extend([[sample_type,] + ['',] * len(binning), weighted, unweighted])
+
+            weighted_latex = [u'${0:.1f} \pm {1:.1f}$'.format(bin.value, bin.error)
+                              for bin in total_weighted.bins()]
+            weighted_latex.insert(0, 'weighted')
+            unweighted_latex = [u'${0:.1f} \pm {1:.1f}$'.format(bin.value, bin.error)
+                                for bin in total_unweighted.bins()]
+            unweighted_latex.insert(0, 'unweighted')
+            table_latex.extend([[sample_type,] + ['',] * len(binning), weighted_latex, unweighted_latex])
+
+            totals.append(total_weighted)
+
+        # signal / background
+        sob = totals[0] / totals[1]
+        row = [u'{0:.1f} +/- {1:.1f}'.format(bin.value, bin.error)
+               for bin in sob.bins()]
+        row.insert(0, 'S / B')
+        table.append(row) 
+        row_latex = [u'${0:.1f} \pm {1:.1f}$'.format(bin.value, bin.error)
+                     for bin in sob.bins()]
+        row_latex.insert(0, '$S / B$')
+        table_latex.append(row_latex) 
+
+        print tabulate(table, headers)
+        print
+        print tabulate(table_latex, headers, tablefmt='latex')
+        print

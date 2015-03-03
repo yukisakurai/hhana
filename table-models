@@ -1,0 +1,230 @@
+#!/usr/bin/env python
+
+from math import sqrt
+
+import matplotlib.pyplot as plt
+
+from mva.analysis import Analysis
+from mva.categories import Category_Preselection, Category_Boosted, Category_VBF, Category_Rest
+from mva.samples import Higgs
+from mva.variables import get_binning, get_label, get_scale, get_units, blind_hist
+from mva.defaults import TARGET_REGION
+from mva.plotting import set_colors, format_plot
+from mva import save_canvas
+
+# pip install --user tabulate
+from tabulate import tabulate
+
+from rootpy.plotting import Hist, Canvas, Legend
+from rootpy.plotting.utils import draw
+from root_numpy import fill_hist
+
+models = [
+    'SS', 'SS_ISOL', 'SS_NONISOL',
+    'nOS', 'nOS_ISOL', 'nOS_NONISOL',
+    'NONISOL', 'OS_NONISOL']
+model_names = [
+    'SS', 'Isolated SS', 'Non-isolated SS',
+    'nOS', 'Isolated nOS', 'Non-isolated nOS',
+    'Non-isolated', 'Non-isolated OS']
+categories = (
+    Category_Preselection, Category_Rest, Category_Boosted, Category_VBF)
+
+
+def print_table(table, headers, caption=None):
+    print
+    print r"\begin{table}"
+    print r"\centering"
+    print tabulate(table, headers, tablefmt="latex")
+    if caption is not None:
+        print r"\caption{%s}" % caption
+    print r"\end{table}"
+    print
+
+
+def tabulate_models(year):
+    headers = ['Model', 'Presel.', 'Rest', 'Boosted', 'VBF']
+    higgs = Higgs(year)
+    table_events = []
+    table_weighted_events = []
+    table_sob = []
+    
+    yields = [[] for c in categories]
+    yield_errors = [[] for c in categories]
+
+    for model_name, model in zip(model_names, models):
+        analysis = Analysis(year, fakes_region=model)
+        analysis.normalize(Category_Preselection)
+        qcd = analysis.qcd
+        row_events = [model_name]
+        row_events_weighted = [model_name]
+        row_sob = [model_name]
+        for i, category in enumerate(categories):
+            qcd_events = qcd.events(category, model, weighted=False)[1].value
+
+            qcd_events_weighted = qcd.events(category, model)
+            qcd_events_weighted_high = qcd.events(category, model, systematic=('QCDFIT_UP',))[1].value
+            qcd_events_weighted_error = sqrt(
+                (qcd_events_weighted_high - qcd_events_weighted[1].value) ** 2 +
+                qcd_events_weighted[1].error ** 2)
+
+            higgs_events = higgs.events(category, model,
+                                        scale=qcd.scale * qcd.data_scale)
+            sob = 100. * higgs_events / qcd_events_weighted
+
+            row_events.append("%d" % qcd_events)
+            row_events_weighted.append("$%.1f \pm %.1f$" % (qcd_events_weighted[1].value, qcd_events_weighted_error))
+            row_sob.append("$%.1f \pm %.1f$" % (sob[1].value, sob[1].error))
+
+            yields[i].append(qcd_events_weighted[1].value)
+            yield_errors[i].append(qcd_events_weighted_error)
+
+        table_events.append(row_events)
+        table_weighted_events.append(row_events_weighted)
+        table_sob.append(row_sob)
+
+    print
+    print year
+    print_table(table_events, headers,
+        caption="Unweighted number of events")
+    print_table(table_weighted_events, headers,
+        caption="Weighted number of events")
+    print_table(table_sob, headers,
+        caption="Signal contamination [\%]")
+
+    # plot weighted number of events
+    f, axarr = plt.subplots(4, sharex=True, figsize=(10, 7), dpi=100)
+    # Fine-tune figure; make subplots close to each other and hide x ticks for
+    # all but bottom plot.
+    plt.setp([a.get_xticklabels() for a in f.axes[:-1]], visible=False)
+    for i, category_name in enumerate(headers[1:]):
+        axarr[i].set_ylabel(category_name)
+        axarr[i].errorbar(range(len(model_names)), yields[i], yerr=yield_errors[i], fmt='o')
+        yloc = plt.MaxNLocator(4, prune='both')
+        axarr[i].yaxis.set_major_locator(yloc)
+        # draw average line
+        avg = sum([x / s**2 for x, s in zip(yields[i], yield_errors[i])]) / sum([1 / s**2 for s in yield_errors[i]])
+        axarr[i].plot([-0.5, len(model_names) - 0.5], [avg, avg], 'r--')
+    axarr[-1].set_xlim(-0.5, len(model_names) - 0.5)
+    axarr[-1].set_xticks(range(len(model_names)))
+    axarr[-1].set_xticklabels(model_names, rotation=45)
+    plt.tight_layout()
+    plt.subplots_adjust(hspace=0.1)
+    for fmt in ('eps', 'png'):
+        plt.savefig('fake_yields_{0}.{1}'.format(year % 1000, fmt))
+
+
+def draw_model_shapes(year, models, model_names):
+    """
+    Compare each fakes model with data
+    """
+    fields = [
+        'dR_tau1_tau2',
+        'dEta_tau1_tau2',
+        'tau1_pt', 'tau2_pt',
+        'mmc1_mass',
+        ]
+        
+    model_analysis = {}
+    for model in models:
+        analysis = Analysis(year=year, fakes_region=model)
+        analysis.normalize(Category_Preselection)
+        model_analysis[model] = analysis
+
+    for category in (Category_Boosted, Category_VBF):
+        # draw BDT of data in mass sideband after subtracting Ztt and others
+        clf = analysis.get_clf(category, load=True, mass=125, transform=True)
+        clf_binning = clf.binning(year)
+        canvas = Canvas()
+        data_hist = Hist(clf_binning)
+        data_scores, _ = analysis.data.scores(
+            clf, category, TARGET_REGION)
+        fill_hist(data_hist, data_scores)
+        hists = []
+        for model, model_name in zip(models, model_names):
+            analysis = model_analysis[model]
+            bkg = Hist(clf_binning)
+            for sample in analysis.backgrounds:
+                scores, weights = sample.scores(
+                    clf, category, TARGET_REGION)['NOMINAL']
+                fill_hist(bkg, scores, weights)
+            # ratio
+            hist = data_hist.Clone(
+                drawstyle='hist', linestyle='dashed',
+                linewidth=3, legendstyle='L',
+                title=model_name)
+            hist -= bkg
+            hist /= data_hist
+            # ignore errors
+            for bin in hist.bins():
+                bin.error = 0
+            blind_hist('bdt', hist, year, category)
+            hists.append(hist)
+        set_colors(hists)
+        axes, bounds = draw(hists, pad=canvas, ypadding=(0.2, 0.05), snap=False)
+        xaxis, yaxis = axes
+        format_plot(canvas, data_hist, xaxis=xaxis, yaxis=yaxis,
+                    xlabel='BDT Score',
+                    divisions=None, data_info=analysis.data.info,
+                    left_label=category.label,
+                    ylabel='(Data - Model) / Data')
+        save_canvas(canvas, 'plots/fake_shapes',
+                    'fake_shapes_bdt_{0}_{1}'.format(category.name,
+                        year % 1000),
+                    formats=('eps', 'png'))
+        # draw extra fields
+        for field in fields:
+            binning = get_binning(field, category, year)
+            scale = get_scale(field)
+            canvas = Canvas()
+            data_hist = Hist(*binning)
+            analysis.data.draw_array(
+                {field: data_hist}, category, TARGET_REGION,
+                field_scale={field: scale})
+            hists = []
+            for model, model_name in zip(models, model_names):
+                analysis = model_analysis[model]
+                bkg = Hist(*binning)
+                for sample in analysis.backgrounds:
+                    sample.draw_array(
+                        {field: bkg}, category, TARGET_REGION,
+                        field_scale={field: scale})
+                # ratio
+                hist = data_hist.Clone(
+                    drawstyle='hist', linestyle='dashed',
+                    linewidth=3, legendstyle='L',
+                    title=model_name)
+                hist -= bkg
+                hist /= data_hist
+                # ignore errors
+                for bin in hist.bins():
+                    bin.error = 0
+                # blind
+                blind_hist(field, hist)
+                hists.append(hist)
+            set_colors(hists)
+            axes, bounds = draw(hists, pad=canvas, ypadding=(0.2, 0.05), snap=False)
+            xaxis, yaxis = axes
+            format_plot(canvas, data_hist, xaxis=xaxis, yaxis=yaxis,
+                        units=get_units(field), xlabel=get_label(field, units=False),
+                        divisions=None, data_info=analysis.data.info,
+                        left_label=category.label,
+                        ylabel='(Data - Model) / Data')
+            save_canvas(canvas, 'plots/fake_shapes',
+                        'fake_shapes_{0}_{1}_{2}'.format(field, category.name,
+                            year % 1000),
+                        formats=('eps', 'png'))
+            # create legend on separate canvas
+            legend_canvas = Canvas()
+            legend_canvas.margin = (0.05, 0.05, 0.05, 0.05)
+            legend = Legend(hists, pad=legend_canvas, leftmargin=0, rightmargin=0, margin=0.15, topmargin=0)
+            legend.Draw()
+            save_canvas(legend_canvas, 'plots/fake_shapes',
+                        'fake_shapes_legend',
+                        formats=('eps', 'png'))
+        
+if __name__ == '__main__':
+    for year in (2011, 2012):
+        #tabulate_models(year)
+        # ignore nonisolated and nonisolated OS
+        draw_model_shapes(year, models[:-2], model_names[:-2])

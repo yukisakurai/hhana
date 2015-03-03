@@ -1,0 +1,53 @@
+#!/usr/bin/env python
+from mva.cmd import get_parser
+
+args = get_parser(actions=False).parse_args()
+
+from mva.categories import (
+    Category_Preselection,
+    Category_VBF,
+    Category_Boosted)
+from mva.analysis import get_analysis
+from mva.plotting import draw_channel_array
+from mva.variables import VARIABLES
+from rootpy.tree import Cut
+from rootpy.plotting import Hist
+from math import pi
+
+# +------+----------------+------------+
+# | Rank |    Variable    | Importance |
+# +------+----------------+------------+
+# |  1   |   mmc1_mass    |   0.876    |
+# +------+----------------+------------+
+# |  2   |  dR_tau1_tau2  |   0.051    |
+# +------+----------------+------------+
+# |  3   |  tau_pt_ratio  |   0.029    |
+# +------+----------------+------------+
+# |  4   |  sum_pt_full   |   0.023    |
+# +------+----------------+------------+
+# |  5   | MET_centrality |   0.022    |
+# +------+----------------+------------+
+
+analysis = get_analysis(
+    args, year=2012,
+    systematics=False)
+
+# fakes_region='nOS_ISOL' for met centrality cut
+analysis.normalize(Category_Preselection)
+
+for var in ( 'mmc1_mass' , 'dR_tau1_tau2', 'tau_pt_ratio', 'sum_pt_full' , 'MET_centrality'):
+
+    draw_channel_array(
+        analysis, {var: VARIABLES[var]},
+        mass=125, mode=['gg', 'VBF'], signal_scale=100,
+        stack_signal=False,
+        signal_colors=['blue', 'red'],
+        signal_linestyles=['dashed', 'solid'],
+        category=Category_Boosted,
+        region=analysis.target_region,
+        show_ratio=True,
+        output_dir='plots/categories',
+        output_suffix='_2012',
+        output_formats=['png', 'eps'],
+        unblind=True,
+        arrow_values=[2.])

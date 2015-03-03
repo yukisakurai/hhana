@@ -1,0 +1,235 @@
+#!/usr/bin/env python
+
+import sys
+import os
+import shutil
+from rootpy.io import root_open
+from rootpy.tree import TreeModel, FloatCol
+from rootpy.plotting import Hist
+import numpy as np
+from root_numpy import array2tree
+import logging
+import ROOT
+from multiprocessing import Process
+
+from mva.classify import histogram_scores, Classifier
+from mva.samples import Higgs
+from mva.categories import (
+    Category_Preselection,
+    Category_VBF,
+    Category_Boosted)
+from mva.categories.features import features_vbf, features_boosted
+from mva.defaults import (
+    TRAIN_FAKES_REGION, FAKES_REGION, TARGET_REGION, NORM_FIELD)
+
+log = logging.getLogger('bdt-score')
+
+# bdt-scores ########
+category = Category_VBF
+region = FAKES_REGION
+mass = 125
+transform = True
+clf_output_suffix = '_%s_ebz_12' % TRAIN_FAKES_REGION
+output_suffix = '_%s_ebz_12' % FAKES_REGION
+classifier_vbf = Classifier(
+    fields=category.features,
+    category=category,
+    region=region,
+    clf_output_suffix=clf_output_suffix,
+    output_suffix=output_suffix,
+    mass=mass,
+    transform=transform)
+category = Category_Boosted
+classifier_boosted = Classifier(
+    fields=category.features,
+    category=category,
+    region=region,
+    clf_output_suffix=clf_output_suffix,
+    output_suffix=output_suffix,
+    mass=mass,
+    transform=transform)
+
+if not classifier_vbf.load(swap=False) or not classifier_boosted.load(swap=False):
+    raise RuntimeError("train BDTs before requesting scores")
+
+
+class Model(TreeModel):
+    BDTScore_vbf = FloatCol()
+    BDTScore_boosted = FloatCol()
+    ggf_weight = FloatCol()
+    ggf_weight_high = FloatCol()
+    ggf_weight_low = FloatCol()
+    vbf_weight = FloatCol()
+
+def get_score(clf, arr):
+    # logistic tranformation used by TMVA (MethodBDT.cxx)
+    score = clf.decision_function(arr)
+    trans_score = -1 + 2.0 / (1.0 +
+                               np.exp(-clf.n_estimators *
+                                       clf.learning_rate * score / 1.5))
+    return trans_score
+
+def add_bdt_scores(tree, energy):
+    tree.create_buffer()
+    tree.set_buffer(Model(), create_branches=True)
+    branches = [tree.GetBranch(b) for b in [
+            'BDTScore_vbf' , 'BDTScore_boosted']]
+
+    for event in tree:
+
+        arr_vbf = np.array([[tree.mmc1_mass,
+                             tree.dEta_jets,
+                             tree.eta_product_jets,
+                             tree.mass_jet1_jet2,
+                             tree.tau1_centrality,
+                             tree.tau2_centrality,
+                             tree.dR_tau1_tau2,
+                             tree.MET_centrality,
+                             tree.vector_sum_pt]])
+
+        arr_boosted = np.array([[tree.mmc1_mass,
+                                 tree.dR_tau1_tau2,
+                                 tree.MET_centrality,
+                                 tree.sum_pt_full,
+                                 tree.tau_pt_ratio]])
+
+        if tree.EventNumber % 2 == 0:
+            clf_vbf = classifier_vbf.clfs[1]
+            clf_boosted = classifier_boosted.clfs[1]
+        else :
+            clf_vbf = classifier_vbf.clfs[0]
+            clf_boosted = classifier_boosted.clfs[0]
+
+        score_vbf = get_score(clf_vbf,arr_vbf)
+        score_boosted = get_score(clf_boosted,arr_boosted)
+#        log.info("vbf score: {0} boosted score: ${1}".format(score_vbf,score_boosted))
+
+        tree.BDTScore_vbf = score_vbf[0]
+        tree.BDTScore_boosted = score_boosted[0]
+        for branch in branches:
+            branch.Fill()
+
+# higgs-pt ##########
+HERE = os.path.dirname(os.path.abspath(__file__))
+data = os.path.join(HERE, 'dat/HRes_HpT_weights.root')
+uncert_data = os.path.join(HERE, 'dat/HRes_HpT_uncert.root')
+vbf_data = os.path.join(HERE, 'dat/HAWK_Over_Pythia_Rebin.root')
+
+WEIGHT = {}
+with root_open(data) as dat:
+    WEIGHT[7] = (dat.Reweigh_PowPy6_To_HRes2Dynamic_01jets,
+                 dat.Reweigh_PowPy6_To_HRes2Dynamic_2jets)
+    WEIGHT[8] = (dat.Reweigh_Powheg_To_HRes2Dynamic_01jets,
+                 dat.Reweigh_Powheg_To_HRes2Dynamic_geq2jets)
+    for hist in WEIGHT[7] + WEIGHT[8]:
+        hist.SetDirectory(0)
+
+with root_open(uncert_data) as dat:
+    UNCERT = dat.HRes_upper_envelope
+    UNCERT.SetDirectory(0)
+
+with root_open(vbf_data) as dat:
+    # make histogram extrapolation-safe
+    VBF_WEIGHT = Hist(dat.h1_histo_ratio_rebin[:18])
+    VBF_WEIGHT.SetDirectory(0)
+
+
+def add_ggf_weights(tree, energy):
+    tree.create_buffer()
+    tree.set_buffer(Model(), create_branches=True)
+    branches = [tree.GetBranch(b) for b in [
+        'ggf_weight', 'ggf_weight_high', 'ggf_weight_low', 'vbf_weight']]
+    weights_01, weights_2 = WEIGHT[energy]
+    for event in tree:
+        # MeV -> GeV
+        pt = tree.true_resonance_pt / 1E3
+        if tree.num_true_jets_no_overlap < 2:
+            weight = weights_01.Interpolate(pt)
+        else:
+            weight = weights_2.Interpolate(pt)
+        uncert = UNCERT.Interpolate(pt)
+        tree.ggf_weight = weight
+        tree.ggf_weight_high = weight * uncert
+        tree.ggf_weight_low = weight * (2 - uncert)
+        tree.vbf_weight = 1.
+        for branch in branches:
+            branch.Fill()
+    tree.SetEntries(-1)
+
+def add_vbf_weights(tree):
+    tree.create_buffer()
+    tree.set_buffer(Model(), create_branches=True)
+    branches = [tree.GetBranch(b) for b in [
+        'ggf_weight', 'ggf_weight_high', 'ggf_weight_low', 'vbf_weight']]
+    for event in tree:
+        # MeV -> GeV
+        pt = tree.true_resonance_pt / 1E3
+        tree.ggf_weight = 1.
+        tree.ggf_weight_high = 1.
+        tree.ggf_weight_low = 1.
+        tree.vbf_weight = VBF_WEIGHT.Interpolate(pt)
+        for branch in branches:
+            branch.Fill()
+    tree.SetEntries(-1)
+
+class Job(Process):
+    def __init__(self, filename):
+        super(Job, self).__init__()
+        self.filename = filename
+
+    def run(self):
+        filename = self.filename
+        path, name = os.path.split(filename)
+        # copy to new file
+        output = os.path.join(path, 'bdtscore.' + name)
+        if os.path.exists(output):
+            log.info("file already exist {0} ...".format(output))
+            return
+        log.info("copying {0} to {1} ...".format(filename, output))
+        shutil.copy(filename, output)
+        energy = 8 if 'mc12' in name else 7
+        with root_open(output, 'UPDATE') as file:
+            tree = file.tau
+            if 'BDTScore_vbf' in tree:
+                log.info("bdtscore already exist in {0} ...".format(output))
+            else:
+                log.info("adding bdtscore to {0} ...".format(output))
+                add_bdt_scores(tree, energy)
+            if '_ggH' in name:
+                if 'ggf_weight' in tree:
+                    log.info("weights already exist in {0} ...".format(output))
+                else:
+                    log.info("adding {0} TeV ggF weights to {1} ...".format(
+                    energy, output))
+                    add_ggf_weights(tree, energy)
+            elif '_VBFH' in name:
+                if 'vbf_weight' in tree:
+                    log.info("weights already exist in {0} ...".format(output))
+                else:
+                    # same weights for 7 and 8 TeV
+                    log.info("adding VBF weights to {0} ...".format(output))
+                    add_vbf_weights(tree)
+            else:
+                log.info("adding unit weights to {0} ...".format(output))
+                print len(tree)
+                array = np.array(np.ones(len(tree)),
+                                 dtype=np.dtype([
+                                     ('ggf_weight', 'float32'),
+                                     ('ggf_weight_high', 'float32'),
+                                     ('ggf_weight_low', 'float32'),
+                                     ('vbf_weight', 'float32')]))
+                if len(tree) != 0:
+                    array2tree(array, tree=tree)
+            tree.Write(tree.name, ROOT.TObject.kOverwrite)
+
+if __name__ == '__main__':
+    from rootpy.extern.argparse import ArgumentParser
+
+    parser = ArgumentParser()
+    parser.add_argument('files', nargs='+')
+    args = parser.parse_args()
+
+    from statstools.parallel import run_pool
+
+    jobs = [Job(f) for f in args.files]
+    run_pool(jobs, n_jobs=-1)
