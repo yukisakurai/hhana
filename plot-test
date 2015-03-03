@@ -13,6 +13,7 @@ from mva.categories import (
     Category_Preselection_RhoRho,
     Category_VBF,
     Category_Boosted,
+    Category_Rest,
     Category_VBF_RhoRho,
     Category_Boosted_RhoRho,
     Category_VBF_PiPi_SR,
@@ -41,7 +42,7 @@ analysis = get_analysis(
     args, year=2012,
     systematics=False)
 
-analysis.normalize(Category_Preselection)
+analysis.normalize(Category_Rest)
 with open(os.path.join(CACHE_DIR, 'binning/binning_vbf_125_12.pickle')) as f:
     binning = pickle.load(f)
 templates = {'BDTScore_vbf_1': Hist(binning, type='D')}
@@ -61,4 +62,5 @@ draw_channel_array(
     output_formats=['pdf', 'eps'],
     arrow_values=[100],
     log_ypadding=(0.3, 0),
+    logy_min=1E-1,
     uniform=True)
