@@ -5,31 +5,7 @@ from mva.cmd import get_parser
 
 args = get_parser(actions=False).parse_args()
 
-from mva.categories import (
-    Category_Preselection,
-    Category_Preselection_PiPi,
-    Category_Preselection_PiRho,
-    Category_Preselection_RhoPi,
-    Category_Preselection_RhoRho,
-    Category_VBF,
-    Category_Boosted,
-    Category_Rest,
-    Category_VBF_RhoRho,
-    Category_Boosted_RhoRho,
-    Category_VBF_PiPi_SR,
-    Category_VBF_RhoRho_SR,
-    Category_VBF_PiRho_SR,
-    Category_VBF_RhoPi_SR,
-    Category_VBF_PiPi_LowScore_Control,
-    Category_VBF_RhoRho_LowScore_Control,
-    Category_VBF_PiRho_LowScore_Control,
-    Category_VBF_RhoPi_LowScore_Control,
-    Category_VBF_PiPi_DEta_Control,
-    Category_VBF_RhoRho_DEta_Control,
-    Category_VBF_PiRho_DEta_Control,
-    Category_VBF_RhoPi_DEta_Control
-    )
-
+from mva.categories import *
 from mva.analysis import get_analysis
 from mva.plotting import draw_channel_array
 from mva.variables import VARIABLES
@@ -42,19 +18,20 @@ analysis = get_analysis(
     args, year=2012,
     systematics=False)
 
-analysis.normalize(Category_Rest)
+analysis.normalize(Category_Preselection_PiRho)
 with open(os.path.join(CACHE_DIR, 'binning/binning_vbf_125_12.pickle')) as f:
     binning = pickle.load(f)
 templates = {'BDTScore_vbf_1': Hist(binning, type='D')}
+#templates = {'Acoplanarity_rho_cluster': Hist(2,0.0,math.pi, type='D')}
 
 draw_channel_array(
     analysis, {'BDTScore_vbf_1': VARIABLES['BDTScore_vbf_1']},
     templates=templates,
-    mass=125, mode='combined', signal_scale=1.0,
-    signal_on_top=True,
-    signal_colors=['red'],
+    mass=125, mode='combined', signal_scale=1.42,
+    signal_on_top=False,
+    signal_colors=['blue'],
     signal_odd_colors=['red'],
-    category=Category_VBF,
+    category=Category_VBF_PiRho_SR,
     region=analysis.target_region,
     show_ratio=False,
     output_dir='plots/categories',

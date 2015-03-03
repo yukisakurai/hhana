@@ -16,7 +16,6 @@ def draw_channel(channel, fit=None, no_data=False,
         channel = channel.apply_snapshot(fit)
     if channel.data and channel.data.hist and not no_data:
         data_hist = channel.data.hist
-        print data_hist.GetSum()
     else:
         data_hist = None
     model_hists = []
@@ -43,8 +42,6 @@ def draw_channel(channel, fit=None, no_data=False,
             log.debug("sample: {0} overallsys: {1} high: {2} low: {3}".format(
                 sample.name, sys_name, osys.high, osys.low))
         nominal_hist.systematics = _systematics
-
-        print nominal_hist.GetSum()
 
         if sample.GetNormFactor('hypo1_frac') is not None:
             signal_hists.append(nominal_hist)

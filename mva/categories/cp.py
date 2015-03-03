@@ -29,7 +29,7 @@ CUTS_VBF_SCORE = 'BDTScore_vbf_1 >= {0}'
 CUTS_BOOSTED_SCORE = 'BDTScore_boosted_1 >= {0}'
 CUTS_VBF_SCORE_CR = 'BDTScore_vbf_1 < {0}'
 CUTS_BOOSTED_SCORE_CR = 'BDTScore_boosted_1 < {0}'
-SCOREBIN = 3
+SCOREBIN = 4
 
 ##### PiPi CHANNEL #####
 class Category_VBF_PiPi_DEta_Control(Category_Preselection_PiPi):
