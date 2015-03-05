@@ -18,20 +18,20 @@ analysis = get_analysis(
     args, year=2012,
     systematics=False)
 
-analysis.normalize(Category_Preselection_PiRho)
+analysis.normalize(Category_Preselection_PiPi)
 with open(os.path.join(CACHE_DIR, 'binning/binning_vbf_125_12.pickle')) as f:
     binning = pickle.load(f)
-templates = {'BDTScore_vbf_1': Hist(binning, type='D')}
-#templates = {'Acoplanarity_rho_cluster': Hist(2,0.0,math.pi, type='D')}
+#templates = {'BDTScore_vbf_1': Hist(binning, type='D')}
+templates = {'Acoplanarity_rho_cluster': Hist(3,0.0,math.pi, type='D')}
 
 draw_channel_array(
-    analysis, {'BDTScore_vbf_1': VARIABLES['BDTScore_vbf_1']},
+    analysis, {'Acoplanarity_rho_cluster': VARIABLES['Acoplanarity_rho_cluster']},
     templates=templates,
     mass=125, mode='combined', signal_scale=1.42,
     signal_on_top=False,
     signal_colors=['blue'],
     signal_odd_colors=['red'],
-    category=Category_VBF_PiRho_SR,
+    category=Category_VBF_PiPi_SR,
     region=analysis.target_region,
     show_ratio=False,
     output_dir='plots/categories',

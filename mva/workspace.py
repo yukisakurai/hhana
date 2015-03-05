@@ -179,6 +179,7 @@ def mva_workspace(analysis, categories, masses,
                   unblind=False,
                   systematics=False,
                   cuts=None):
+
     hist_template = Hist(5, 0, 1.5, type='D')
     controls = analysis.make_var_channels(
         hist_template, 'dEta_tau1_tau2',
@@ -187,6 +188,7 @@ def mva_workspace(analysis, categories, masses,
         include_signal=True, masses=masses,
         systematics=systematics)
     mass_category_channel = {}
+
     for category in analysis.iter_categories(categories):
         for mass in masses:
             clf = analysis.get_clf(category, load=True,
@@ -412,21 +414,21 @@ def cp_workspace(analysis, categories, masses,
 
     channels = {}
     controls = {}
+    for mass in masses:
+        controls[mass] = {}
     for category in analysis.iter_categories(categories):
         for mass in masses:
 
             print 'Category Name ------'
             print category.name
-            controls[mass] = {}
             for decay in ['pipi','rhorho','pirho','rhopi'] :
                 if decay in category.name:
                     deta_control_name = 'cp_workspace_' + decay + '_deta_controls'
-
                     for deta_category in analysis.iter_categories(deta_control_name):
-                        field = 'dEta_tau1_tau2'
-                        template = Hist(5, 0,1.5, type='D')
+                        field_deta = 'dEta_tau1_tau2'
+                        template_deta = Hist(5, 0,1.5, type='D')
                         control = analysis.get_channel_array(
-                            {field: template},
+                            {field_deta: template_deta},
                             category=deta_category,
                             region=analysis.target_region,
                             cuts=None,
@@ -435,7 +437,7 @@ def cp_workspace(analysis, categories, masses,
                             mass=mass,
                             mode='workspace',
                             systematics=systematics,
-                            uniform=False)[field]
+                            uniform=False)[field_deta]
 
                         controls[mass][deta_category.name] = control
 
@@ -461,7 +463,7 @@ def cp_workspace(analysis, categories, masses,
                                             systematics=systematics,
                                             uniform=True)[field]
 
-                                    controls[mass][lowscore_category.name] = control
+                                        controls[mass][lowscore_category.name] = control
 
             if 'pipi' in category.name :
                 field = 'Acoplanarity_IP'
@@ -471,8 +473,8 @@ def cp_workspace(analysis, categories, masses,
                 field = 'Acoplanarity_tau1_IP_tau2_rho_cluster'
             elif 'rhopi' in category.name:
                 field = 'Acoplanarity_tau2_IP_tau1_rho_cluster'
+            template = Hist(3, 0, math.pi, type='D')
 
-            template = Hist(2, 0, math.pi, type='D')
             channel = analysis.get_channel_array(
                 {field: template},
                 category=category,

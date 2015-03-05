@@ -158,7 +158,7 @@ class Category_VBF_RhoRho_LowScore_Control(Category_Preselection_RhoRho):
         & CUTS_VBF_SCORE_CR.format(binning_vbf_125_12[len(binning_vbf_125_12)-SCOREBIN]))
 
 class Category_VBF_RhoRho_SR(Category_Preselection_RhoRho):
-    name = 'vbf_rhorho_sr'
+    name = 'vbf_rhorho'
     label = '#tau_{had}^{#pm}#tau_{had}^{#mp}#rightarrow#rho^{#pm}#rho^{#mp} VBF BDTScore High 3'
     latex = '\\textbf{\rho^{\pm}\rho^{\mp} VBF BDTScore High 3}'
     color = 'red'

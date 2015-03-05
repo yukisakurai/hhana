@@ -37,8 +37,8 @@ for year, year_categories in zip(years, categories):
                           **params)
     signal_regions[year] = sr
     control_regions[year] = cr
-# print signal_regions
-# print control_regions
+print signal_regions
+print control_regions
 suffix = analysis.get_suffix(year=False)
 path = 'workspaces/hh_cp{0}'.format(suffix.lower())
 write_workspaces(path, 'hh_cp', signal_regions, controls=control_regions)
