@@ -18,20 +18,60 @@ analysis = get_analysis(
     args, year=2012,
     systematics=False)
 
-analysis.normalize(Category_Preselection_PiPi)
-with open(os.path.join(CACHE_DIR, 'binning/binning_vbf_125_12.pickle')) as f:
-    binning = pickle.load(f)
-#templates = {'BDTScore_vbf_1': Hist(binning, type='D')}
-templates = {'Acoplanarity_rho_cluster': Hist(3,0.0,math.pi, type='D')}
+decay = 'pirho'
+prod = 'vbf'
+
+if decay == 'pipi':
+    field = 'Acoplanarity_IP'
+    norm_category = Category_Preselection_PiPi
+    if prod == 'vbf':
+        category = Category_VBF_PiPi_SR
+    elif prod == 'boosted':
+        category = Category_Boosted_PiPi_SR
+elif decay == 'rhorho':
+    field = 'Acoplanarity_rho_cluster'
+    norm_category = Category_Preselection_RhoRho
+    if prod == 'vbf':
+        category = Category_VBF_RhoRho_SR
+    elif prod == 'boosted':
+        category = Category_Boosted_RhoRho_SR
+elif decay == 'pirho':
+    field = 'Acoplanarity_tau1_IP_tau2_rho_cluster'
+    norm_category = Category_Preselection_PiRho
+    if prod == 'vbf':
+        category = Category_VBF_PiRho_SR
+    elif prod == 'boosted':
+        category = Category_Boosted_PiRho_SR
+elif decay == 'rhopi':
+    field = 'Acoplanarity_tau2_IP_tau1_rho_cluster'
+    norm_category = Category_Preselection_RhoPi
+    if prod == 'vbf':
+        category = Category_VBF_RhoPi_SR
+    elif prod == 'boosted':
+        category = Category_Boosted_RhoPi_SR
+
+norm_category = Category_Preselection
+category = Category_VBF
+analysis.normalize(norm_category)
+
+if 'Acoplanarity' in field:
+    templates = {field: Hist(2,0.0,math.pi, type='D')}
+elif 'BDTScore' in field:
+    with open(os.path.join(CACHE_DIR, 'binning/binning_vbf_125_12.pickle')) as f:
+        binning = pickle.load(f)
+        templates = {field: Hist(binning, type='D')}
+
+field = 'mmc1_mass'
+templates = {field: Hist(20, 0, 250, type='D')}
 
 draw_channel_array(
-    analysis, {'Acoplanarity_rho_cluster': VARIABLES['Acoplanarity_rho_cluster']},
+    analysis, {field: VARIABLES[field]},
     templates=templates,
-    mass=125, mode='combined', signal_scale=1.42,
+    mass=125, mode='combined', signal_scale=50,
     signal_on_top=False,
-    signal_colors=['blue'],
+    signal_colors=['red'],
     signal_odd_colors=['red'],
-    category=Category_VBF_PiPi_SR,
+    category=category,
     region=analysis.target_region,
     show_ratio=False,
     output_dir='plots/categories',
