@@ -178,10 +178,10 @@ class Higgs(MC, Signal):
 
         if label is None:
             if CP_weight:
-                label = '%s#font[52]{A^{0}}(%s)#rightarrow#tau#tau' % (
+                label = '%s#font[52]{A}(%s)' % (
                     str_mode, str_mass)
             else:
-                label = '%s#font[52]{H^{0}}(%s)#rightarrow#tau#tau' % (
+                label = '%s#font[52]{H}(%s)' % (
                     str_mode, str_mass)
 
         if year == 2011:

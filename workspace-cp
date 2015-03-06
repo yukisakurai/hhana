@@ -28,8 +28,8 @@ control_regions = {}
 
 for year, year_categories in zip(years, categories):
 
-    # 8TeV had-had mu value = 1.48
-    analysis = get_analysis(args, year=year, mu=1.48)
+    # 8TeV had-had mu value = 1.42
+    analysis = get_analysis(args, year=year, mu=1.42)
     sr, cr = cp_workspace(analysis=analysis,
                           categories=year_categories,
                           masses=masses,

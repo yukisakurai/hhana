@@ -546,14 +546,14 @@ def draw(name,
         ymin = logy_min
 
     # draw arrows
-    if arrow_values is not None:
-        arrow_top = ymin + (ymax - ymin) / 2.
-        fig.cd('main')
-        for value in arrow_values:
-            arrow = Arrow(value, arrow_top, value, ymin, 0.05, '|>')
-            arrow.SetAngle(30)
-            arrow.SetLineWidth(2)
-            arrow.Draw()
+    # if arrow_values is not None:
+    #     arrow_top = ymin + (ymax - ymin) / 2.
+    #     fig.cd('main')
+    #     for value in arrow_values:
+    #         arrow = Arrow(value, arrow_top, value, ymin, 0.05, '|>')
+    #         arrow.SetAngle(30)
+    #         arrow.SetLineWidth(2)
+    #         arrow.Draw()
 
     if show_pvalue and data is not None and model:
         fig.cd('main')

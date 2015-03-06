@@ -61,8 +61,8 @@ elif 'BDTScore' in field:
         binning = pickle.load(f)
         templates = {field: Hist(binning, type='D')}
 
-field = 'mmc1_mass'
-templates = {field: Hist(20, 0, 250, type='D')}
+field = 'mass_jet1_jet2'
+templates = {field: Hist(10, 0.0, 1500, type='D')}
 
 draw_channel_array(
     analysis, {field: VARIABLES[field]},
@@ -80,4 +80,4 @@ draw_channel_array(
     arrow_values=[100],
     log_ypadding=(0.3, 0),
     logy_min=0.11,
-    uniform=True)
+    uniform=False)
