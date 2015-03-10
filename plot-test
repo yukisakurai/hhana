@@ -18,7 +18,7 @@ analysis = get_analysis(
     args, year=2012,
     systematics=False)
 
-decay = 'pirho'
+decay = 'rhorho'
 prod = 'vbf'
 
 if decay == 'pipi':
@@ -50,8 +50,8 @@ elif decay == 'rhopi':
     elif prod == 'boosted':
         category = Category_Boosted_RhoPi_SR
 
-norm_category = Category_Preselection
-category = Category_VBF
+# norm_category = Category_Preselection
+# category = Category_VBF
 analysis.normalize(norm_category)
 
 if 'Acoplanarity' in field:
@@ -61,15 +61,15 @@ elif 'BDTScore' in field:
         binning = pickle.load(f)
         templates = {field: Hist(binning, type='D')}
 
-field = 'mass_jet1_jet2'
-templates = {field: Hist(10, 0.0, 1500, type='D')}
+# field = 'mass_jet1_jet2'
+# templates = {field: Hist(10, 0.0, 1500, type='D')}
 
 draw_channel_array(
     analysis, {field: VARIABLES[field]},
     templates=templates,
-    mass=125, mode='combined', signal_scale=50,
-    signal_on_top=False,
-    signal_colors=['red'],
+    mass=125, mode='combined', signal_scale=1.42,
+    signal_on_top=True,
+    signal_colors=['blue'],
     signal_odd_colors=['red'],
     category=category,
     region=analysis.target_region,

@@ -419,18 +419,6 @@ def cp_workspace(analysis, categories, masses,
     for category in analysis.iter_categories(categories):
         for mass in masses:
 
-            if 'pipi' in category.name :
-                field = 'Acoplanarity_IP'
-            elif 'rhorho' in category.name :
-                field = 'Acoplanarity_rho_cluster'
-            elif 'pirho' in category.name:
-                field = 'Acoplanarity_tau1_IP_tau2_rho_cluster'
-            elif 'rhopi' in category.name:
-                field = 'Acoplanarity_tau2_IP_tau1_rho_cluster'
-
-            template = Hist(2, 0, math.pi, type='D')
-
-
             print 'Category Name ------'
             print category.name
             for decay in ['pipi','rhorho','pirho','rhopi'] :
@@ -457,11 +445,11 @@ def cp_workspace(analysis, categories, masses,
                             if prod in category.name :
                                 lowscore_control_name = 'cp_workspace_' + prod + '_' + decay + '_lowscore_controls'
                                 for lowscore_category in analysis.iter_categories(lowscore_control_name):
-                                    # with open(os.path.join(CACHE_DIR, 'binning/binning_' + prod + '_125_12.pickle')) as f:
-                                    #     binning = pickle.load(f)
+                                    with open(os.path.join(CACHE_DIR, 'binning/binning_' + prod + '_125_12.pickle')) as f:
+                                        binning = pickle.load(f)
 
-                                    # field = 'BDTScore_' + prod + '_1'
-                                    # template = Hist(binning, type='D')
+                                    field = 'BDTScore_' + prod + '_1'
+                                    template = Hist(binning, type='D')
 
                                     control = analysis.get_channel_array(
                                         {field: template},
@@ -476,6 +464,17 @@ def cp_workspace(analysis, categories, masses,
                                         uniform=True)[field]
 
                                     controls[mass][lowscore_category.name] = control
+
+            if 'pipi' in category.name :
+                field = 'Acoplanarity_IP'
+            elif 'rhorho' in category.name :
+                field = 'Acoplanarity_rho_cluster'
+            elif 'pirho' in category.name:
+                field = 'Acoplanarity_tau1_IP_tau2_rho_cluster'
+            elif 'rhopi' in category.name:
+                field = 'Acoplanarity_tau2_IP_tau1_rho_cluster'
+
+            template = Hist(2, 0, math.pi, type='D')
 
             channel = analysis.get_channel_array(
                 {field: template},

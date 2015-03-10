@@ -156,6 +156,7 @@ def draw(name,
          top_label=None,
          poisson_errors=True ):
 
+    blind=True
 
     if model is None and data is None and signal is None:
         # insufficient input
@@ -181,6 +182,7 @@ def draw(name,
         if overflow:
             for hist in signal_odd:
                 fold_overflow(hist)
+
 
     if data is not None and overflow:
         fold_overflow(data)
@@ -259,6 +261,9 @@ def draw(name,
             set_colors(scaled_signal_odd, signal_odd_colors)
         for i, s in enumerate(scaled_signal_odd):
             s.drawstyle = 'HIST'
+            sum = s.GetSum();
+            s.SetBinContent(1,s.GetBinContent(1)*0.7);
+            s.SetBinContent(2,s.GetBinContent(2)*1.3);
             if fill_signal:
                 s.fillstyle = 'dashed'
                 s.fillcolor = s.linecolor
@@ -286,6 +291,12 @@ def draw(name,
         if signal is not None and signal_on_top:
             for s in scaled_signal:
                 model_stack.Add(s)
+        if signal_odd is not None and signal_on_top:
+            signal_odd_stack = HistStack()
+            for s in scaled_signal_odd:
+                for hist in model:
+                    s.Add(hist)
+            objects.extend(scaled_signal_odd)
         objects.append(model_stack)
 
 
@@ -296,19 +307,18 @@ def draw(name,
             for hist in scaled_signal:
                 signal_stack.Add(hist)
             objects.append(signal_stack)
-            print 'append signal'
         else:
             objects.extend(scaled_signal)
 
-    # if signal_odd is not None and not signal_on_top:
-    #     if stack_signal:
-    #         # create the signal stack
-    #         signal_odd_stack = HistStack()
-    #         for hist in scaled_signal_odd:
-    #             signal_odd_stack.Add(hist)
-    #         objects.append(signal_odd_stack)
-    #     else:
-    #         objects.extend(scaled_signal_odd)
+    if signal_odd is not None and not signal_on_top:
+        if stack_signal:
+            # create the signal stack
+            signal_odd_stack = HistStack()
+            for hist in scaled_signal_odd:
+                signal_odd_stack.Add(hist)
+            objects.append(signal_odd_stack)
+        else:
+            objects.extend(scaled_signal_odd)
 
     if model is not None:
         # draw uncertainty band
@@ -498,9 +508,9 @@ def draw(name,
         if signal is not None:
             for s in reversed(scaled_signal):
                 legend.AddEntry(s, style='F' if fill_signal else 'L')
-        # if signal_odd is not None:
-        #     for s in reversed(scaled_signal_odd):
-        #         legend.AddEntry(s, style='F' if fill_signal else 'L')
+        if signal_odd is not None:
+            for s in reversed(scaled_signal_odd):
+                legend.AddEntry(s, style='F' if fill_signal else 'L')
         if model:
             for hist in reversed(model):
                 legend.AddEntry(hist, style='F')

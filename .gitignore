@@ -24,7 +24,7 @@
 *.tar.gz
 *.txt
 *.xml
-*setup.sh
+setup.sh
 *validate.txt
 *~
 .nfs*
