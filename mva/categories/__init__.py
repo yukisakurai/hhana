@@ -139,14 +139,14 @@ CATEGORIES = {
 
     # CP analysis
     'cp': [
-        Category_VBF_PiPi_SR,
-        Category_VBF_RhoRho_SR,
-        Category_VBF_PiRho_SR,
-        Category_VBF_RhoPi_SR,
+        # Category_VBF_PiPi_SR,
+        # Category_VBF_RhoRho_SR,
+        # Category_VBF_PiRho_SR,
+        # Category_VBF_RhoPi_SR,
         Category_Boosted_PiPi_SR,
-        Category_Boosted_RhoRho_SR,
-        Category_Boosted_PiRho_SR,
-        Category_Boosted_RhoPi_SR,
+        # Category_Boosted_RhoRho_SR,
+        # Category_Boosted_PiRho_SR,
+        # Category_Boosted_RhoPi_SR,
         ],
     'cp_workspace_pipi_deta_controls': [
         Category_Rest_PiPi,

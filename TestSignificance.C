@@ -194,7 +194,7 @@ double TestSignificance ( TString infile = "hh_cp_12_combination_125.root",
   }
 
   // We can use PROOF to speed things along in parallel
-  ProofConfig pc(*w, 1e3, "workers=5", false);
+  ProofConfig pc(*w, 1e2, "workers=5", false);
   toymcs.SetProofConfig(&pc);    // enable proof
 
    // instantiate the calculator
